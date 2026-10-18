@@ -1,6 +1,7 @@
 package com.example.doomscroller.ui.screens
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -27,10 +28,12 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.example.doomscroller.R
 import com.example.doomscroller.ui.theme.BauhausBlack
 import com.example.doomscroller.ui.theme.BauhausBlue
 import com.example.doomscroller.ui.theme.BauhausCanvas
@@ -52,6 +55,17 @@ fun OnboardingScreen(
         horizontalAlignment = Alignment.CenterHorizontally,
         verticalArrangement = Arrangement.Center
     ) {
+        // App Logo Emblem
+        Image(
+            painter = painterResource(id = R.drawable.app_logo),
+            contentDescription = "DoomScroller Logo",
+            modifier = Modifier
+                .size(130.dp)
+                .border(BorderStroke(2.5.dp, BauhausBlack), RoundedCornerShape(0.dp))
+        )
+
+        Spacer(modifier = Modifier.height(24.dp))
+
         // Bauhaus Manifest Card
         Card(
             modifier = Modifier

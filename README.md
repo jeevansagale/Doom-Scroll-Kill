@@ -1,5 +1,9 @@
 # Doom-Scroll-Kill (Doomscroller)
 
+<p align="center">
+  <img src="app_logo.png" alt="DoomScroller Logo" width="220" />
+</p>
+
 > A focused, privacy-respecting Android application engineered to interrupt doomscrolling habits through deterministic reminder escalation, penalty cooldowns, and a clean Bauhaus design language.
 
 ---

@@ -1,9 +1,12 @@
 package com.example.doomscroller.ui.screens
 
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.ui.res.painterResource
+import com.example.doomscroller.R
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -97,12 +100,14 @@ fun DashboardScreen(
                     ),
                     title = {
                         Row(verticalAlignment = Alignment.CenterVertically) {
-                            Box(
+                            Image(
+                                painter = painterResource(id = R.drawable.app_logo),
+                                contentDescription = "DoomScroller Logo",
                                 modifier = Modifier
-                                    .size(12.dp)
-                                    .background(BauhausRed)
+                                    .size(24.dp)
+                                    .border(BorderStroke(1.5.dp, BauhausBlack), RoundedCornerShape(0.dp))
                             )
-                            Spacer(modifier = Modifier.width(8.dp))
+                            Spacer(modifier = Modifier.width(10.dp))
                             Text(
                                 text = "DOOMSCROLLER",
                                 style = MaterialTheme.typography.titleLarge.copy(

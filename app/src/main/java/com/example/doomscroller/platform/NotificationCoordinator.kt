@@ -76,7 +76,7 @@ class NotificationCoordinator(private val context: Context) {
         return NotificationCompat.Builder(context, CHANNEL_SERVICE)
             .setContentTitle("Doomscroller Monitoring Active")
             .setContentText("Actively monitoring screen time and usage limits")
-            .setSmallIcon(R.drawable.ic_launcher_foreground)
+            .setSmallIcon(R.drawable.ic_notification_eye)
             .setOngoing(true)
             .setContentIntent(pendingIntent)
             .setPriority(NotificationCompat.PRIORITY_LOW)
@@ -139,7 +139,7 @@ class NotificationCoordinator(private val context: Context) {
             }
 
             val builder = NotificationCompat.Builder(context, CHANNEL_WARNINGS)
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setSmallIcon(R.drawable.ic_notification_eye)
                 .setContentTitle(title)
                 .setContentText(body)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(body))
@@ -229,7 +229,7 @@ class NotificationCoordinator(private val context: Context) {
             }
 
             val builder = NotificationCompat.Builder(context, CHANNEL_WARNINGS)
-                .setSmallIcon(R.drawable.ic_launcher_foreground)
+                .setSmallIcon(R.drawable.ic_notification_eye)
                 .setContentTitle(title)
                 .setContentText(body)
                 .setStyle(NotificationCompat.BigTextStyle().bigText(body))
