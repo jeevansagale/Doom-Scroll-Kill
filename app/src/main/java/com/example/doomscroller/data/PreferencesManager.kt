@@ -20,6 +20,16 @@ data class PenaltyInfo(
     val remainingMillis: Long get() = (endTimeMillis - System.currentTimeMillis()).coerceAtLeast(0L)
 }
 
+enum class EnforcementState {
+    MONITORING,
+    REMINDER_DUE,
+    REMINDER_SENT,
+    ESCALATION_DUE,
+    ENFORCING,
+    COOLDOWN,
+    RECOVERED
+}
+
 data class ReminderSession(
     val packageName: String,
     val qualifyingUsageMillis: Long = 0L,
@@ -29,7 +39,9 @@ data class ReminderSession(
     val isAcknowledged: Boolean = false,
     val isEnforcementActive: Boolean = false,
     val enforcementStartTimeMillis: Long = 0L,
-    val enforcementEndTimeMillis: Long = 0L
+    val enforcementEndTimeMillis: Long = 0L,
+    val currentState: EnforcementState = EnforcementState.MONITORING,
+    val hasEnforcedThisEpisode: Boolean = false
 ) {
     val isPenaltyExpired: Boolean
         get() = isEnforcementActive && System.currentTimeMillis() >= enforcementEndTimeMillis
@@ -260,6 +272,20 @@ class PreferencesManager(context: Context) : com.example.doomscroller.domain.Not
         prefs.edit().putInt("setting_ignored_reminder_limit", clamped).apply()
     }
 
+    // --- Configurable Destination App Setting ---
+    fun getDestinationPackage(): String? {
+        val pkg = prefs.getString("setting_destination_package", null)
+        return if (pkg.isNullOrBlank()) null else pkg
+    }
+
+    fun setDestinationPackage(packageName: String?) {
+        if (packageName.isNullOrBlank()) {
+            prefs.edit().remove("setting_destination_package").apply()
+        } else {
+            prefs.edit().putString("setting_destination_package", packageName).apply()
+        }
+    }
+
     // --- ReminderSession State Persistence ---
     private fun parseReminderSession(str: String): ReminderSession? {
         val parts = str.split(";")
@@ -273,7 +299,21 @@ class PreferencesManager(context: Context) : com.example.doomscroller.domain.Not
             val active = parts[6].toBooleanStrictOrNull() ?: false
             val start = parts[7].toLongOrNull() ?: return null
             val end = parts[8].toLongOrNull() ?: return null
-            return ReminderSession(pkg, usage, count, ignored, lastTime, ack, active, start, end)
+            val state = if (parts.size >= 10) {
+                try {
+                    EnforcementState.valueOf(parts[9])
+                } catch (e: Exception) {
+                    if (active) EnforcementState.COOLDOWN else EnforcementState.MONITORING
+                }
+            } else {
+                if (active) EnforcementState.COOLDOWN else EnforcementState.MONITORING
+            }
+            val hasEnforced = if (parts.size >= 11) {
+                parts[10].toBooleanStrictOrNull() ?: active
+            } else {
+                active
+            }
+            return ReminderSession(pkg, usage, count, ignored, lastTime, ack, active, start, end, state, hasEnforced)
         }
         return null
     }
@@ -286,7 +326,8 @@ class PreferencesManager(context: Context) : com.example.doomscroller.domain.Not
     fun saveReminderSession(session: ReminderSession) {
         val serialized = "${session.packageName};${session.qualifyingUsageMillis};${session.reminderCount};" +
                 "${session.ignoredCount};${session.lastReminderTimeMillis};${session.isAcknowledged};" +
-                "${session.isEnforcementActive};${session.enforcementStartTimeMillis};${session.enforcementEndTimeMillis}"
+                "${session.isEnforcementActive};${session.enforcementStartTimeMillis};${session.enforcementEndTimeMillis};" +
+                "${session.currentState.name};${session.hasEnforcedThisEpisode}"
         prefs.edit().putString("session_${session.packageName}", serialized).apply()
     }
 

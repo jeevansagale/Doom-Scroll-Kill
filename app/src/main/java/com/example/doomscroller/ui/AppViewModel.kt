@@ -52,6 +52,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _reminderCapPer15Min = MutableStateFlow(prefs.getReminderCapPer15Min())
     val reminderCapPer15Min: StateFlow<Int> = _reminderCapPer15Min
 
+    private val _destinationPackage = MutableStateFlow(prefs.getDestinationPackage())
+    val destinationPackage: StateFlow<String?> = _destinationPackage
+
     val activePenalty: StateFlow<PenaltyInfo?> = enforcementManager.activePenalty
 
     init {
@@ -128,6 +131,23 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
 
     fun isOnboardingCompleted(): Boolean {
         return prefs.isOnboardingCompleted()
+    }
+
+    fun setDestinationPackage(packageName: String?) {
+        // Self-launch protection: prevent DoomScroller from being chosen as its own destination
+        if (packageName == getApplication<Application>().packageName) {
+            return
+        }
+        prefs.setDestinationPackage(packageName)
+        _destinationPackage.value = packageName
+    }
+
+    fun isDestinationValid(packageName: String?): Boolean {
+        return enforcementManager.isPackageLaunchable(packageName)
+    }
+
+    fun getAppName(packageName: String): String {
+        return enforcementManager.getAppName(packageName)
     }
     
     fun refreshUsage() {

@@ -77,6 +77,17 @@ class EnforcementManager private constructor(private val context: Context) {
     }
 
     @Synchronized
+    fun isPackageLaunchable(packageName: String?): Boolean {
+        if (packageName.isNullOrBlank()) return false
+        return try {
+            val intent = context.packageManager.getLaunchIntentForPackage(packageName)
+            intent != null
+        } catch (e: Exception) {
+            false
+        }
+    }
+
+    @Synchronized
     fun evaluateRules(
         usageMap: Map<String, Long>,
         rules: List<AppRule>,
@@ -108,8 +119,22 @@ class EnforcementManager private constructor(private val context: Context) {
                 prefs.clearActivePenalty(pkg)
                 notificationCoordinator.cancelWarningNotification(pkg)
                 rateLimiter.onConditionEnded(pkg)
+
+                // Recover reminder session to MONITORING state with new baseline
+                val usedMillis = usageMap[pkg] ?: 0L
+                val oldSession = prefs.getReminderSession(pkg)
+                val (resetSession, _) = reminderEscalationEvaluator.evaluate(
+                    session = oldSession,
+                    isForeground = (pkg == foregroundPackage),
+                    currentUsageMillis = usedMillis,
+                    intervalMinutes = monitoredRules.find { it.packageName == pkg }?.limitMinutes ?: 5,
+                    ignoredLimit = prefs.getIgnoredReminderLimit(),
+                    now = now
+                )
+                prefs.saveReminderSession(resetSession)
+
                 _enforcementEvents.tryEmit(EnforcementEvent.PenaltyExpired(pkg))
-                Log.i(TAG, "Active penalty for $pkg expired at $now. Cleared active reminder state.")
+                Log.i(TAG, "Active penalty for $pkg expired at $now. Cleared active penalty, reset baseline ($usedMillis ms), and resumed monitoring.")
             } else if (foregroundPackage == pkg) {
                 // User is actively in this penalized package; check rate limiter before repeating notification!
                 val appName = getAppName(pkg)
@@ -125,6 +150,10 @@ class EnforcementManager private constructor(private val context: Context) {
                     recordIfAllowed = true
                 )
                 if (rateLimit.allowed) {
+                    val destPkg = prefs.getDestinationPackage()
+                    val isDestValid = isPackageLaunchable(destPkg)
+                    val destAppName = if (destPkg != null && isDestValid) getAppName(destPkg) else null
+
                     notificationCoordinator.showWarningNotification(
                         packageName = pkg,
                         appName = appName,
@@ -133,7 +162,9 @@ class EnforcementManager private constructor(private val context: Context) {
                         warningCount = penalty.warningCount,
                         isPenaltyActive = true,
                         remainingSeconds = remainingSeconds,
-                        ignoredRemindersCount = penalty.warningCount
+                        ignoredRemindersCount = penalty.warningCount,
+                        destinationPackage = if (isDestValid) destPkg else null,
+                        destinationAppName = destAppName
                     )
                 } else {
                     Log.d(TAG, "Polling check: repeat notification for $pkg suppressed (${rateLimit.reason})")
@@ -202,7 +233,7 @@ class EnforcementManager private constructor(private val context: Context) {
             ignoredLimit = ignoredLimit,
             now = now
         )
-        prefs.saveReminderSession(updatedSession)
+
         val appName = getAppName(foregroundPackage)
 
         when (decision) {
@@ -215,7 +246,7 @@ class EnforcementManager private constructor(private val context: Context) {
                     recordIfAllowed = true
                 )
                 if (rateLimit.allowed) {
-                    notificationCoordinator.showReminderNotification(
+                    val delivered = notificationCoordinator.showReminderNotification(
                         packageName = foregroundPackage,
                         appName = appName,
                         reminderNumber = decision.reminderNumber,
@@ -223,8 +254,15 @@ class EnforcementManager private constructor(private val context: Context) {
                         limitCount = decision.limitCount,
                         intervalMinutes = decision.intervalMinutes
                     )
+                    if (delivered) {
+                        val sentSession = reminderEscalationEvaluator.markReminderSent(updatedSession)
+                        prefs.saveReminderSession(sentSession)
+                    } else {
+                        prefs.saveReminderSession(updatedSession)
+                    }
                 } else {
                     Log.w(TAG, "Reminder notification suppressed for $foregroundPackage: ${rateLimit.reason}")
+                    prefs.saveReminderSession(updatedSession)
                 }
             }
             is EscalationDecision.TriggerEnforcement -> {
@@ -251,6 +289,53 @@ class EnforcementManager private constructor(private val context: Context) {
                     recordIfAllowed = true
                 )
 
+                // Execute Enforcement Action: Launch configured destination app or fallback
+                val destPkg = prefs.getDestinationPackage()
+                val isDestValid = isPackageLaunchable(destPkg)
+                val destAppName = if (destPkg != null && isDestValid) getAppName(destPkg) else null
+
+                Log.i(TAG, "Executing enforcement action: destPkg=$destPkg, valid=$isDestValid, destAppName=$destAppName")
+
+                // 1. Direct launch attempt if destination app configured, valid, and permitted
+                if (destPkg != null && isDestValid && destPkg != context.packageName) {
+                    if (permissionManager.hasOverlayPermission()) {
+                        try {
+                            val launchIntent = context.packageManager.getLaunchIntentForPackage(destPkg)?.apply {
+                                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                            }
+                            if (launchIntent != null) {
+                                context.startActivity(launchIntent)
+                                Log.i(TAG, "Direct launch SUCCESS: Dispatched launch intent for destination app $destPkg ($destAppName)")
+                            } else {
+                                Log.w(TAG, "Direct launch FAILED: No launch intent found for $destPkg")
+                            }
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Direct launch EXCEPTION for destination app $destPkg", e)
+                        }
+                    } else {
+                        Log.w(TAG, "Direct background launch blocked: overlay permission not granted. Relying on high-priority notification.")
+                    }
+                } else if (destPkg != null && !isDestValid) {
+                    Log.w(TAG, "Configured destination app $destPkg is uninstalled or disabled. Showing warning fallback.")
+                } else {
+                    // No destination app configured: fallback to Interruption warning activity if overlay granted
+                    if (permissionManager.hasOverlayPermission()) {
+                        try {
+                            val warningIntent = Intent(context, MainActivity::class.java).apply {
+                                action = "com.example.doomscroller.ACTION_INTERRUPTION"
+                                putExtra("destination", "interruption")
+                                putExtra("packageName", foregroundPackage)
+                                flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                            }
+                            context.startActivity(warningIntent)
+                            Log.i(TAG, "Overlay permission granted: launched warning screen directly over $foregroundPackage")
+                        } catch (e: Exception) {
+                            Log.e(TAG, "Failed to launch warning screen directly with overlay permission", e)
+                        }
+                    }
+                }
+
+                // 2. High-priority Warning Notification (fallback and persistent indicator)
                 notificationCoordinator.showWarningNotification(
                     packageName = foregroundPackage,
                     appName = appName,
@@ -259,8 +344,14 @@ class EnforcementManager private constructor(private val context: Context) {
                     warningCount = decision.ignoredCount,
                     isPenaltyActive = true,
                     remainingSeconds = ((decision.penaltyEndTimeMillis - now) / 1000).toInt(),
-                    ignoredRemindersCount = decision.ignoredCount
+                    ignoredRemindersCount = decision.ignoredCount,
+                    destinationPackage = if (isDestValid) destPkg else null,
+                    destinationAppName = destAppName
                 )
+
+                // 3. Mark enforced: transition ENFORCING -> COOLDOWN, set hasEnforcedThisEpisode = true
+                val cooldownSession = reminderEscalationEvaluator.markEnforced(updatedSession)
+                prefs.saveReminderSession(cooldownSession)
 
                 _enforcementEvents.tryEmit(
                     EnforcementEvent.WarningTriggered(
@@ -270,24 +361,21 @@ class EnforcementManager private constructor(private val context: Context) {
                         isPenalty = true
                     )
                 )
-
-                if (permissionManager.hasOverlayPermission()) {
-                    try {
-                        val warningIntent = Intent(context, MainActivity::class.java).apply {
-                            action = "com.example.doomscroller.ACTION_INTERRUPTION"
-                            putExtra("destination", "interruption")
-                            putExtra("packageName", foregroundPackage)
-                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
-                        }
-                        context.startActivity(warningIntent)
-                        Log.i(TAG, "Overlay permission granted: launched warning screen directly over $foregroundPackage")
-                    } catch (e: Exception) {
-                        Log.e(TAG, "Failed to launch warning screen directly with overlay permission", e)
-                    }
-                }
+            }
+            is EscalationDecision.PenaltyExpired -> {
+                Log.i(TAG, "Evaluator detected penalty expired for $foregroundPackage. Resuming monitoring.")
+                prefs.clearActivePenalty(foregroundPackage)
+                val updated = _activePenalties.value.toMutableMap()
+                updated.remove(foregroundPackage)
+                _activePenalties.value = updated
+                _activePenalty.value = updated.values.firstOrNull()
+                notificationCoordinator.cancelWarningNotification(foregroundPackage)
+                rateLimiter.onConditionEnded(foregroundPackage)
+                prefs.saveReminderSession(updatedSession)
+                _enforcementEvents.tryEmit(EnforcementEvent.PenaltyExpired(foregroundPackage))
             }
             is EscalationDecision.NoAction -> {
-                // Usage has not reached next reminder threshold
+                prefs.saveReminderSession(updatedSession)
             }
         }
 

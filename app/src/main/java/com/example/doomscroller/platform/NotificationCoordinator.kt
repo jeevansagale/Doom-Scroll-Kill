@@ -175,7 +175,9 @@ class NotificationCoordinator(private val context: Context) {
         warningCount: Int,
         isPenaltyActive: Boolean,
         remainingSeconds: Int,
-        ignoredRemindersCount: Int = 0
+        ignoredRemindersCount: Int = 0,
+        destinationPackage: String? = null,
+        destinationAppName: String? = null
     ): Boolean {
         if (!permissionManager.hasNotificationPermission()) {
             Log.w(TAG, "POST_NOTIFICATIONS not granted. Cannot post warning for $packageName")
@@ -211,6 +213,21 @@ class NotificationCoordinator(private val context: Context) {
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
+            // Destination app launch intent (if configured and valid)
+            val destLaunchIntent = if (!destinationPackage.isNullOrBlank()) {
+                context.packageManager.getLaunchIntentForPackage(destinationPackage)?.apply {
+                    addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                }
+            } else null
+            val destPendingIntent = destLaunchIntent?.let {
+                PendingIntent.getActivity(
+                    context,
+                    notificationId + 3,
+                    it,
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+                )
+            }
+
             val remainingMin = remainingSeconds / 60
             val remainingSec = remainingSeconds % 60
             val countdownStr = String.format("%02d:%02d", remainingMin, remainingSec)
@@ -223,10 +240,16 @@ class NotificationCoordinator(private val context: Context) {
 
             val body = if (isPenaltyActive) {
                 val ignoredNotice = if (ignoredRemindersCount > 0) " ($ignoredRemindersCount reminders ignored)." else "."
-                "Usage limit exceeded$ignoredNotice 5-minute cooldown active ($countdownStr remaining). Stop scrolling and step away."
+                if (destPendingIntent != null && !destinationAppName.isNullOrBlank()) {
+                    "Usage limit exceeded$ignoredNotice 5-minute cooldown active ($countdownStr remaining). Tap to switch to $destinationAppName."
+                } else {
+                    "Usage limit exceeded$ignoredNotice 5-minute cooldown active ($countdownStr remaining). Stop scrolling and step away."
+                }
             } else {
                 "Daily limit of ${limitMinutes}m reached (${usedMinutes}m used). Take a break."
             }
+
+            val primaryContentIntent = destPendingIntent ?: openPendingIntent
 
             val builder = NotificationCompat.Builder(context, CHANNEL_WARNINGS)
                 .setSmallIcon(R.drawable.ic_notification_eye)
@@ -236,23 +259,34 @@ class NotificationCoordinator(private val context: Context) {
                 .setPriority(NotificationCompat.PRIORITY_MAX)
                 .setCategory(NotificationCompat.CATEGORY_ALARM)
                 .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
-                .setContentIntent(openPendingIntent)
-                .setFullScreenIntent(openPendingIntent, true) // Heads-up / full-screen intent
+                .setContentIntent(primaryContentIntent)
+                .setFullScreenIntent(primaryContentIntent, true) // Heads-up / full-screen intent
                 .setAutoCancel(false)
                 .setOngoing(isPenaltyActive)
-                .addAction(
-                    android.R.drawable.ic_menu_close_clear_cancel,
-                    "Exit to Home Screen",
-                    leavePendingIntent
+
+            // Add Destination App action if available
+            if (destPendingIntent != null && !destinationAppName.isNullOrBlank()) {
+                builder.addAction(
+                    android.R.drawable.ic_media_play,
+                    "Open $destinationAppName",
+                    destPendingIntent
                 )
-                .addAction(
-                    android.R.drawable.ic_menu_info_details,
-                    "View Warning",
-                    openPendingIntent
-                )
+            }
+
+            // Always provide standard escape options
+            builder.addAction(
+                android.R.drawable.ic_menu_close_clear_cancel,
+                "Exit to Home Screen",
+                leavePendingIntent
+            )
+            builder.addAction(
+                android.R.drawable.ic_menu_info_details,
+                "View Warning",
+                openPendingIntent
+            )
 
             notificationManager.notify(notificationId, builder.build())
-            Log.i(TAG, "Notification delivered successfully for $packageName (id=$notificationId, penalty=$isPenaltyActive, remaining=${remainingSeconds}s)")
+            Log.i(TAG, "Notification delivered successfully for $packageName (id=$notificationId, penalty=$isPenaltyActive, remaining=${remainingSeconds}s, dest=$destinationPackage)")
             return true
         } catch (e: Exception) {
             Log.e(TAG, "Failed to deliver notification for $packageName", e)

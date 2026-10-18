@@ -289,10 +289,12 @@ class ReminderEscalationEvaluatorTest {
             lastReminderTimeMillis = penaltyStart,
             isEnforcementActive = true,
             enforcementStartTimeMillis = penaltyStart,
-            enforcementEndTimeMillis = penaltyEnd
+            enforcementEndTimeMillis = penaltyEnd,
+            currentState = com.example.doomscroller.data.EnforcementState.COOLDOWN,
+            hasEnforcedThisEpisode = true
         )
 
-        // 1 second after penalty expires
+        // 1 second after penalty expires: COOLDOWN -> RECOVERED -> MONITORING
         val (resetSession, decision) = evaluator.evaluate(
             session = penalizedSession,
             isForeground = true,
@@ -302,9 +304,104 @@ class ReminderEscalationEvaluatorTest {
             now = penaltyEnd + 1000L
         )
 
-        assertTrue(decision is EscalationDecision.NoAction)
+        assertTrue("Decision must be PenaltyExpired upon expiry", decision is EscalationDecision.PenaltyExpired)
+        assertEquals(packageName, (decision as EscalationDecision.PenaltyExpired).packageName)
         assertFalse("Enforcement must be inactive after cooldown", resetSession.isEnforcementActive)
         assertEquals(0, resetSession.ignoredCount)
         assertEquals(0, resetSession.reminderCount)
+        assertEquals(com.example.doomscroller.data.EnforcementState.MONITORING, resetSession.currentState)
+        assertFalse(resetSession.hasEnforcedThisEpisode)
+        assertEquals(20 * 60 * 1000L, resetSession.qualifyingUsageMillis) // baseline updated
+    }
+
+    @Test
+    fun `scenario 8 - complete 7-state lifecycle transition verification`() {
+        val packageName = "com.instagram.android"
+        val intervalMinutes = 5
+        val intervalMillis = 5 * 60 * 1000L
+        val ignoredLimit = 2
+        var now = 1_000_000L
+
+        // 1. Initial State: MONITORING
+        var session = ReminderSession(packageName = packageName, currentState = com.example.doomscroller.data.EnforcementState.MONITORING)
+        assertEquals(com.example.doomscroller.data.EnforcementState.MONITORING, session.currentState)
+
+        // 2. Threshold reached -> REMINDER_DUE
+        val (sDue, dReminder1) = evaluator.evaluate(
+            session = session,
+            isForeground = true,
+            currentUsageMillis = intervalMillis,
+            intervalMinutes = intervalMinutes,
+            ignoredLimit = ignoredLimit,
+            now = now
+        )
+        assertTrue(dReminder1 is EscalationDecision.SendReminder)
+        assertEquals(com.example.doomscroller.data.EnforcementState.REMINDER_DUE, sDue.currentState)
+
+        // 3. Notification submitted -> REMINDER_SENT
+        val sSent = evaluator.markReminderSent(sDue)
+        assertEquals(com.example.doomscroller.data.EnforcementState.REMINDER_SENT, sSent.currentState)
+
+        // 4. Another interval passes without acknowledgement (ignored=1) -> REMINDER_DUE -> REMINDER_SENT
+        now += intervalMillis
+        val (sDue2, dReminder2) = evaluator.evaluate(
+            session = sSent,
+            isForeground = true,
+            currentUsageMillis = 2 * intervalMillis,
+            intervalMinutes = intervalMinutes,
+            ignoredLimit = ignoredLimit,
+            now = now
+        )
+        assertTrue(dReminder2 is EscalationDecision.SendReminder)
+        assertEquals(1, (dReminder2 as EscalationDecision.SendReminder).ignoredCount)
+        val sSent2 = evaluator.markReminderSent(sDue2)
+        assertEquals(com.example.doomscroller.data.EnforcementState.REMINDER_SENT, sSent2.currentState)
+
+        // 5. Another interval passes without acknowledgement (ignored reaches limit 2) -> ENFORCING
+        now += intervalMillis
+        val (sEnforcing, dEnforce) = evaluator.evaluate(
+            session = sSent2,
+            isForeground = true,
+            currentUsageMillis = 3 * intervalMillis,
+            intervalMinutes = intervalMinutes,
+            ignoredLimit = ignoredLimit,
+            now = now
+        )
+        assertTrue(dEnforce is EscalationDecision.TriggerEnforcement)
+        assertEquals(com.example.doomscroller.data.EnforcementState.ENFORCING, sEnforcing.currentState)
+
+        // 6. Action dispatched -> COOLDOWN
+        val sCooldown = evaluator.markEnforced(sEnforcing)
+        assertEquals(com.example.doomscroller.data.EnforcementState.COOLDOWN, sCooldown.currentState)
+        assertTrue(sCooldown.hasEnforcedThisEpisode)
+
+        // 7. Polling while penalty active maintains COOLDOWN and avoids duplicate actions
+        val (sMidCooldown, dMid) = evaluator.evaluate(
+            session = sCooldown,
+            isForeground = true,
+            currentUsageMillis = 3 * intervalMillis + 60_000L,
+            intervalMinutes = intervalMinutes,
+            ignoredLimit = ignoredLimit,
+            now = now + 60_000L
+        )
+        assertTrue(dMid is EscalationDecision.NoAction)
+        assertEquals(com.example.doomscroller.data.EnforcementState.COOLDOWN, sMidCooldown.currentState)
+
+        // 8. Penalty expires -> RECOVERED -> MONITORING
+        now += 5 * 60 * 1000L + 1000L
+        val (sRecovered, dExpired) = evaluator.evaluate(
+            session = sCooldown,
+            isForeground = true,
+            currentUsageMillis = 3 * intervalMillis + 120_000L,
+            intervalMinutes = intervalMinutes,
+            ignoredLimit = ignoredLimit,
+            now = now
+        )
+        assertTrue(dExpired is EscalationDecision.PenaltyExpired)
+        assertEquals(com.example.doomscroller.data.EnforcementState.MONITORING, sRecovered.currentState)
+        assertFalse(sRecovered.isEnforcementActive)
+        assertFalse(sRecovered.hasEnforcedThisEpisode)
+        assertEquals(0, sRecovered.ignoredCount)
+        assertEquals(0, sRecovered.reminderCount)
     }
 }

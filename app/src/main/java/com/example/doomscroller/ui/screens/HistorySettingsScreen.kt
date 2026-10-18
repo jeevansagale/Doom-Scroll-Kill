@@ -34,10 +34,19 @@ import androidx.compose.material3.SliderDefaults
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
 import androidx.compose.material3.TopAppBarDefaults
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
@@ -69,6 +78,11 @@ fun HistorySettingsScreen(
     val ignoredLimit by viewModel.ignoredReminderLimit.collectAsState()
     val reminderCap by viewModel.reminderCapPer15Min.collectAsState()
     val hasOverlayPermission by viewModel.hasOverlayPermission.collectAsState()
+    val destinationPackage by viewModel.destinationPackage.collectAsState()
+    val installedApps by viewModel.installedApps.collectAsState()
+
+    var showAppPicker by remember { mutableStateOf(false) }
+    var searchQuery by remember { mutableStateOf("") }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -472,6 +486,264 @@ fun HistorySettingsScreen(
                         }
                     }
                 }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Section 1.6: Enforcement Destination App
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(BorderStroke(2.dp, BauhausBlack), RoundedCornerShape(0.dp)),
+                colors = CardDefaults.cardColors(containerColor = BauhausCanvas),
+                shape = RoundedCornerShape(0.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(modifier = Modifier.size(8.dp).background(BauhausBlue))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "ENFORCEMENT DESTINATION APPLICATION",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Black,
+                                letterSpacing = 1.sp
+                            )
+                        )
+                    }
+                    Spacer(modifier = Modifier.height(10.dp))
+                    Text(
+                        text = "REDIRECT TARGET APPLICATION",
+                        style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Black)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "When reminder escalation reaches the penalty threshold, DoomScroller automatically launches your designated productivity application (e.g. Notes, Tasks, or Calendar) to break the doomscroll loop.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = BauhausBlack.copy(alpha = 0.8f)
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    val isConfigured = !destinationPackage.isNullOrBlank()
+                    val isValid = isConfigured && viewModel.isDestinationValid(destinationPackage)
+                    val destAppName = if (isConfigured) viewModel.getAppName(destinationPackage!!) else "NO DESTINATION SELECTED"
+
+                    Box(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .border(BorderStroke(1.5.dp, BauhausBlack), RoundedCornerShape(0.dp))
+                            .background(if (isConfigured) (if (isValid) BauhausMuted else BauhausRed.copy(alpha = 0.1f)) else BauhausMuted)
+                            .padding(12.dp)
+                    ) {
+                        Column {
+                            Row(
+                                modifier = Modifier.fillMaxWidth(),
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.SpaceBetween
+                            ) {
+                                Column(modifier = Modifier.weight(1f)) {
+                                    Text(
+                                        text = destAppName.uppercase(),
+                                        style = MaterialTheme.typography.titleSmall.copy(
+                                            fontWeight = FontWeight.Black,
+                                            color = BauhausBlack
+                                        )
+                                    )
+                                    if (isConfigured) {
+                                        Text(
+                                            text = destinationPackage!!,
+                                            style = MaterialTheme.typography.bodySmall.copy(fontSize = 11.sp),
+                                            color = BauhausBlack.copy(alpha = 0.7f)
+                                        )
+                                    }
+                                }
+                                Box(
+                                    modifier = Modifier
+                                        .background(if (!isConfigured) BauhausBlack else if (isValid) BauhausBlue else BauhausRed)
+                                        .padding(horizontal = 8.dp, vertical = 4.dp)
+                                ) {
+                                    Text(
+                                        text = if (!isConfigured) "NONE" else if (isValid) "ACTIVE" else "INVALID",
+                                        style = MaterialTheme.typography.labelSmall.copy(
+                                            fontWeight = FontWeight.Black,
+                                            color = Color.White
+                                        )
+                                    )
+                                }
+                            }
+                            if (isConfigured && !isValid) {
+                                Spacer(modifier = Modifier.height(6.dp))
+                                Text(
+                                    text = "Selected application is uninstalled or disabled. Please select a replacement app.",
+                                    style = MaterialTheme.typography.bodySmall.copy(color = BauhausRed, fontWeight = FontWeight.Bold)
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Row(modifier = Modifier.fillMaxWidth()) {
+                        Button(
+                            onClick = {
+                                searchQuery = ""
+                                showAppPicker = true
+                            },
+                            shape = RoundedCornerShape(0.dp),
+                            border = BorderStroke(2.dp, BauhausBlack),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = BauhausBlack,
+                                contentColor = Color.White
+                            ),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(
+                                text = if (isConfigured) "CHANGE DESTINATION" else "SELECT DESTINATION APP",
+                                fontWeight = FontWeight.Black
+                            )
+                        }
+
+                        if (isConfigured) {
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Button(
+                                onClick = { viewModel.setDestinationPackage(null) },
+                                shape = RoundedCornerShape(0.dp),
+                                border = BorderStroke(1.5.dp, BauhausBlack),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = BauhausCanvas,
+                                    contentColor = BauhausBlack
+                                )
+                            ) {
+                                Text("CLEAR", fontWeight = FontWeight.Black)
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Dialog for App Picker
+            if (showAppPicker) {
+                val filteredApps = installedApps.filter {
+                    it.name.contains(searchQuery, ignoreCase = true) ||
+                            it.packageName.contains(searchQuery, ignoreCase = true)
+                }
+
+                AlertDialog(
+                    onDismissRequest = { showAppPicker = false },
+                    shape = RoundedCornerShape(0.dp),
+                    containerColor = BauhausCanvas,
+                    titleContentColor = BauhausBlack,
+                    textContentColor = BauhausBlack,
+                    title = {
+                        Row(verticalAlignment = Alignment.CenterVertically) {
+                            Box(modifier = Modifier.size(10.dp).background(BauhausBlack))
+                            Spacer(modifier = Modifier.width(8.dp))
+                            Text(
+                                text = "SELECT DESTINATION APP",
+                                style = MaterialTheme.typography.titleMedium.copy(fontWeight = FontWeight.Black)
+                            )
+                        }
+                    },
+                    text = {
+                        Column(modifier = Modifier.fillMaxWidth()) {
+                            Text(
+                                text = "Choose a productivity or utility app to open when enforcement activates:",
+                                style = MaterialTheme.typography.bodySmall
+                            )
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            OutlinedTextField(
+                                value = searchQuery,
+                                onValueChange = { searchQuery = it },
+                                modifier = Modifier.fillMaxWidth(),
+                                placeholder = { Text("Search installed apps...", fontSize = 12.sp) },
+                                singleLine = true,
+                                shape = RoundedCornerShape(0.dp),
+                                colors = OutlinedTextFieldDefaults.colors(
+                                    focusedBorderColor = BauhausBlack,
+                                    unfocusedBorderColor = BauhausBlack.copy(alpha = 0.5f),
+                                    focusedContainerColor = BauhausMuted,
+                                    unfocusedContainerColor = BauhausCanvas
+                                )
+                            )
+
+                            Spacer(modifier = Modifier.height(8.dp))
+
+                            if (filteredApps.isEmpty()) {
+                                Box(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(150.dp),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text("No matching apps found", style = MaterialTheme.typography.bodySmall)
+                                }
+                            } else {
+                                LazyColumn(
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(280.dp)
+                                ) {
+                                    items(filteredApps, key = { it.packageName }) { app ->
+                                        Row(
+                                            modifier = Modifier
+                                                .fillMaxWidth()
+                                                .border(BorderStroke(1.dp, BauhausBlack.copy(alpha = 0.15f)), RoundedCornerShape(0.dp))
+                                                .background(if (app.packageName == destinationPackage) BauhausYellow.copy(alpha = 0.3f) else BauhausCanvas)
+                                                .clickable {
+                                                    viewModel.setDestinationPackage(app.packageName)
+                                                    showAppPicker = false
+                                                }
+                                                .padding(horizontal = 10.dp, vertical = 8.dp),
+                                            verticalAlignment = Alignment.CenterVertically
+                                        ) {
+                                            Box(
+                                                modifier = Modifier
+                                                    .size(28.dp)
+                                                    .background(BauhausBlack),
+                                                contentAlignment = Alignment.Center
+                                            ) {
+                                                Text(
+                                                    text = app.name.take(1).uppercase(),
+                                                    color = Color.White,
+                                                    fontWeight = FontWeight.Black,
+                                                    fontSize = 14.sp
+                                                )
+                                            }
+                                            Spacer(modifier = Modifier.width(10.dp))
+                                            Column(modifier = Modifier.weight(1f)) {
+                                                Text(
+                                                    text = app.name,
+                                                    style = MaterialTheme.typography.bodyMedium.copy(fontWeight = FontWeight.Bold),
+                                                    color = BauhausBlack
+                                                )
+                                                Text(
+                                                    text = app.packageName,
+                                                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 10.sp),
+                                                    color = BauhausBlack.copy(alpha = 0.6f)
+                                                )
+                                            }
+                                        }
+                                        Spacer(modifier = Modifier.height(4.dp))
+                                    }
+                                }
+                            }
+                        }
+                    },
+                    confirmButton = {
+                        Button(
+                            onClick = { showAppPicker = false },
+                            shape = RoundedCornerShape(0.dp),
+                            border = BorderStroke(1.5.dp, BauhausBlack),
+                            colors = ButtonDefaults.buttonColors(
+                                containerColor = BauhausBlack,
+                                contentColor = Color.White
+                            )
+                        ) {
+                            Text("CLOSE", fontWeight = FontWeight.Black)
+                        }
+                    }
+                )
             }
 
             Spacer(modifier = Modifier.height(16.dp))
