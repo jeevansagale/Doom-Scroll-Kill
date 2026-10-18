@@ -16,8 +16,11 @@ data class PenaltyInfo(
     val warningCount: Int,
     val isAcknowledged: Boolean = false
 ) {
-    val isExpired: Boolean get() = System.currentTimeMillis() >= endTimeMillis
-    val remainingMillis: Long get() = (endTimeMillis - System.currentTimeMillis()).coerceAtLeast(0L)
+    fun isExpired(now: Long = System.currentTimeMillis()): Boolean = now >= endTimeMillis
+    fun remainingMillis(now: Long = System.currentTimeMillis()): Long = (endTimeMillis - now).coerceAtLeast(0L)
+
+    val isExpired: Boolean get() = isExpired(System.currentTimeMillis())
+    val remainingMillis: Long get() = remainingMillis(System.currentTimeMillis())
 }
 
 enum class EnforcementState {
@@ -51,14 +54,23 @@ data class ReminderSession(
     val answeredQuestions: List<String> = emptyList(),
     val isLearningGateCompleted: Boolean = false
 ) {
+    fun isPenaltyExpired(now: Long = System.currentTimeMillis()): Boolean =
+        isEnforcementActive && now >= enforcementEndTimeMillis
+
+    fun remainingCooldownMillis(now: Long = System.currentTimeMillis()): Long =
+        if (isEnforcementActive) (enforcementEndTimeMillis - now).coerceAtLeast(0L) else 0L
+
+    fun isRestrictionSatisfied(now: Long = System.currentTimeMillis()): Boolean =
+        isLearningGateCompleted && isPenaltyExpired(now)
+
     val isPenaltyExpired: Boolean
-        get() = isEnforcementActive && System.currentTimeMillis() >= enforcementEndTimeMillis
+        get() = isPenaltyExpired(System.currentTimeMillis())
 
     val remainingCooldownMillis: Long
-        get() = if (isEnforcementActive) (enforcementEndTimeMillis - System.currentTimeMillis()).coerceAtLeast(0L) else 0L
+        get() = remainingCooldownMillis(System.currentTimeMillis())
 
     val isRestrictionSatisfied: Boolean
-        get() = isLearningGateCompleted && isPenaltyExpired
+        get() = isRestrictionSatisfied(System.currentTimeMillis())
 }
 
 class PreferencesManager(context: Context) : com.example.doomscroller.domain.NotificationPolicyPreferences {

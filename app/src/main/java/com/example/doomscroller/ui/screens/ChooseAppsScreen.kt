@@ -46,6 +46,16 @@ import com.example.doomscroller.ui.theme.BauhausCanvas
 import com.example.doomscroller.ui.theme.BauhausMuted
 import com.example.doomscroller.ui.theme.BauhausYellow
 
+import androidx.compose.foundation.Image
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.core.graphics.drawable.toBitmap
+
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun ChooseAppsScreen(
@@ -55,12 +65,24 @@ fun ChooseAppsScreen(
 ) {
     val installedApps by viewModel.installedApps.collectAsState()
     val rules by viewModel.rules.collectAsState()
+    var searchQuery by remember { mutableStateOf("") }
 
     LaunchedEffect(Unit) {
         viewModel.loadApps()
     }
 
     val selectedPackages = remember(rules) { rules.map { it.packageName }.toSet() }
+
+    val filteredApps = remember(installedApps, searchQuery) {
+        if (searchQuery.isBlank()) {
+            installedApps
+        } else {
+            installedApps.filter {
+                it.name.contains(searchQuery, ignoreCase = true) ||
+                it.packageName.contains(searchQuery, ignoreCase = true)
+            }
+        }
+    }
 
     Scaffold(
         modifier = modifier,
@@ -91,6 +113,41 @@ fun ChooseAppsScreen(
                     }
                 )
                 HorizontalDivider(thickness = 2.dp, color = BauhausBlack)
+
+                // Responsive Search Input
+                Box(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(horizontal = 16.dp, vertical = 10.dp)
+                ) {
+                    OutlinedTextField(
+                        value = searchQuery,
+                        onValueChange = { searchQuery = it },
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .heightIn(min = 48.dp),
+                        placeholder = {
+                            Text(
+                                text = "SEARCH APPLICATIONS...",
+                                style = MaterialTheme.typography.labelMedium.copy(
+                                    color = BauhausBlack.copy(alpha = 0.5f),
+                                    fontWeight = FontWeight.Bold
+                                )
+                            )
+                        },
+                        singleLine = true,
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = BauhausBlack,
+                            unfocusedBorderColor = BauhausBlack,
+                            focusedContainerColor = BauhausCanvas,
+                            unfocusedContainerColor = BauhausCanvas,
+                            focusedTextColor = BauhausBlack,
+                            unfocusedTextColor = BauhausBlack
+                        ),
+                        shape = RoundedCornerShape(0.dp)
+                    )
+                }
+                HorizontalDivider(thickness = 1.dp, color = BauhausBlack.copy(alpha = 0.3f))
             }
         }
     ) { innerPadding ->
@@ -111,6 +168,33 @@ fun ChooseAppsScreen(
                     )
                 }
             }
+        } else if (filteredApps.isEmpty()) {
+            Box(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(innerPadding)
+                    .consumeWindowInsets(innerPadding),
+                contentAlignment = Alignment.Center
+            ) {
+                Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                    Box(
+                        modifier = Modifier
+                            .size(32.dp)
+                            .border(BorderStroke(2.dp, BauhausBlack), RoundedCornerShape(0.dp))
+                    )
+                    Spacer(modifier = Modifier.height(12.dp))
+                    Text(
+                        text = "NO MATCHING APPLICATIONS",
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Black),
+                        color = BauhausBlack
+                    )
+                    Text(
+                        text = "TRY A DIFFERENT SEARCH TERM",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = BauhausBlack.copy(alpha = 0.6f)
+                    )
+                }
+            }
         } else {
             LazyVerticalGrid(
                 columns = GridCells.Adaptive(minSize = 300.dp),
@@ -123,18 +207,28 @@ fun ChooseAppsScreen(
                 verticalArrangement = Arrangement.spacedBy(10.dp)
             ) {
                 items(
-                    items = installedApps,
+                    items = filteredApps,
                     key = { it.packageName },
                     contentType = { "app_item" }
                 ) { app ->
                     val isSelected = selectedPackages.contains(app.packageName)
+                    val appBitmap = remember(app.icon) {
+                        app.icon?.let { d ->
+                            try {
+                                d.toBitmap(96, 96).asImageBitmap()
+                            } catch (e: Exception) {
+                                null
+                            }
+                        }
+                    }
+
                     Row(
                         modifier = Modifier
                             .fillMaxWidth()
-                            .border(BorderStroke(1.5.dp, BauhausBlack), RoundedCornerShape(0.dp))
+                            .border(BorderStroke(if (isSelected) 2.dp else 1.5.dp, BauhausBlack), RoundedCornerShape(0.dp))
                             .background(if (isSelected) BauhausMuted else BauhausCanvas)
                             .clickable { onAppSelected(app.packageName) }
-                            .padding(horizontal = 16.dp, vertical = 14.dp),
+                            .padding(horizontal = 14.dp, vertical = 12.dp),
                         horizontalArrangement = Arrangement.SpaceBetween,
                         verticalAlignment = Alignment.CenterVertically
                     ) {
@@ -142,26 +236,59 @@ fun ChooseAppsScreen(
                             modifier = Modifier.weight(1f),
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Box(
-                                modifier = Modifier
-                                    .size(8.dp)
-                                    .background(if (isSelected) BauhausBlack else Color.Transparent)
-                                    .border(BorderStroke(1.dp, BauhausBlack), RoundedCornerShape(0.dp))
-                            )
-                            Spacer(modifier = Modifier.width(10.dp))
-                            Text(
-                                text = app.name.uppercase(),
-                                style = MaterialTheme.typography.bodyMedium.copy(
-                                    fontWeight = if (isSelected) FontWeight.Black else FontWeight.Medium
-                                ),
-                                color = BauhausBlack
-                            )
+                            if (appBitmap != null) {
+                                Image(
+                                    bitmap = appBitmap,
+                                    contentDescription = app.name,
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .border(BorderStroke(1.dp, BauhausBlack), RoundedCornerShape(0.dp))
+                                )
+                            } else {
+                                Box(
+                                    modifier = Modifier
+                                        .size(36.dp)
+                                        .background(if (isSelected) BauhausBlack else BauhausCanvas)
+                                        .border(BorderStroke(1.dp, BauhausBlack), RoundedCornerShape(0.dp)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text(
+                                        text = app.name.take(1).uppercase(),
+                                        style = MaterialTheme.typography.labelMedium.copy(
+                                            fontWeight = FontWeight.Black,
+                                            color = if (isSelected) Color.White else BauhausBlack
+                                        )
+                                    )
+                                }
+                            }
+
+                            Spacer(modifier = Modifier.width(12.dp))
+
+                            Column {
+                                Text(
+                                    text = app.name.uppercase(),
+                                    style = MaterialTheme.typography.bodyMedium.copy(
+                                        fontWeight = if (isSelected) FontWeight.Black else FontWeight.Bold
+                                    ),
+                                    color = BauhausBlack,
+                                    maxLines = 1
+                                )
+                                Text(
+                                    text = app.packageName,
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        color = BauhausBlack.copy(alpha = 0.6f)
+                                    ),
+                                    maxLines = 1
+                                )
+                            }
                         }
-                        
+
+                        Spacer(modifier = Modifier.width(8.dp))
+
                         // Geometric square indicator
                         Box(
                             modifier = Modifier
-                                .size(22.dp)
+                                .size(24.dp)
                                 .border(BorderStroke(2.dp, BauhausBlack), RoundedCornerShape(0.dp))
                                 .background(if (isSelected) BauhausBlack else BauhausCanvas),
                             contentAlignment = Alignment.Center
@@ -169,7 +296,7 @@ fun ChooseAppsScreen(
                             if (isSelected) {
                                 Box(
                                     modifier = Modifier
-                                        .size(8.dp)
+                                        .size(10.dp)
                                         .background(BauhausYellow)
                                 )
                             }

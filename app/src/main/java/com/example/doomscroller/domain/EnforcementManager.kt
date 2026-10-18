@@ -116,7 +116,12 @@ class EnforcementManager private constructor(private val context: Context) {
                 continue
             }
 
-            if (penalty.isExpired) {
+            val session = prefs.getReminderSession(pkg)
+            val isCooldownElapsed = now >= penalty.endTimeMillis
+            val isLearningCompleted = session.isLearningGateCompleted
+
+            if (isCooldownElapsed && isLearningCompleted) {
+                // Both conditions met: release penalty
                 expiredPackages.add(pkg)
                 prefs.clearActivePenalty(pkg)
                 notificationCoordinator.cancelWarningNotification(pkg)
@@ -124,9 +129,8 @@ class EnforcementManager private constructor(private val context: Context) {
 
                 // Recover reminder session to MONITORING state with new baseline
                 val usedMillis = usageMap[pkg] ?: 0L
-                val oldSession = prefs.getReminderSession(pkg)
                 val (resetSession, _) = reminderEscalationEvaluator.evaluate(
-                    session = oldSession,
+                    session = session,
                     isForeground = (pkg == foregroundPackage),
                     currentUsageMillis = usedMillis,
                     intervalMinutes = monitoredRules.find { it.packageName == pkg }?.limitMinutes ?: 5,
@@ -136,10 +140,10 @@ class EnforcementManager private constructor(private val context: Context) {
                 prefs.saveReminderSession(resetSession)
 
                 _enforcementEvents.tryEmit(EnforcementEvent.PenaltyExpired(pkg))
-                Log.i(TAG, "Active penalty for $pkg expired at $now. Cleared active penalty, reset baseline ($usedMillis ms), and resumed monitoring.")
+                Log.i(TAG, "Both conditions met for $pkg: cooldown elapsed and learning gate completed. Cleared active penalty and resumed monitoring.")
             } else if (foregroundPackage == pkg) {
-                // Monitored package observed returning to foreground during active restriction!
-                // Attempt direct redirection to Learning Gate if overlay is permitted
+                // Restriction remains active (cooldown counting down or learning gate pending)
+                // If overlay permission granted, launch/re-launch Learning Gate directly over restricted app
                 if (permissionManager.hasOverlayPermission()) {
                     try {
                         val gateIntent = Intent(context, MainActivity::class.java).apply {
@@ -160,7 +164,7 @@ class EnforcementManager private constructor(private val context: Context) {
                 val usedMinutes = ((usageMap[pkg] ?: 0L) / 60000L).toInt()
                 val rule = monitoredRules.find { it.packageName == pkg }
                 val limitMinutes = rule?.limitMinutes ?: 5
-                val remainingSeconds = (penalty.remainingMillis / 1000).toInt()
+                val remainingSeconds = ((penalty.endTimeMillis - now).coerceAtLeast(0L) / 1000).toInt()
 
                 val rateLimit = rateLimiter.evaluateNotification(
                     packageName = pkg,

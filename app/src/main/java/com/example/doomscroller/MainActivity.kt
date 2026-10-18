@@ -110,22 +110,37 @@ class MainActivity : ComponentActivity() {
         val action = intent.action
         val dest = intent.getStringExtra("destination")
         Log.i(TAG, "handleIntent: action=$action, dest=$dest")
+
+        val rawPackage = intent.getStringExtra("packageName") ?: ""
+        val sanitizedPackage = if (rawPackage.matches(Regex("^[a-zA-Z0-9_.]+$"))) {
+            rawPackage
+        } else {
+            "unknown"
+        }
+
         if (action == "com.example.doomscroller.ACTION_LEARNING_GATE" || dest == "learning_gate") {
-            val rawPackage = intent.getStringExtra("packageName") ?: ""
-            val sanitizedPackage = if (rawPackage.matches(Regex("^[a-zA-Z0-9_.]+$"))) {
-                rawPackage
+            // Security verification: verify this package is actively monitored and restricted
+            val prefs = PreferencesManager(this)
+            val session = prefs.getReminderSession(sanitizedPackage)
+            val rule = prefs.getRule(sanitizedPackage)
+            if (rule != null && rule.isEnabled && (session.isEnforcementActive || session.isLearningGateCompleted)) {
+                pendingDestination.value = Screen.LearningGate.createRoute(sanitizedPackage)
             } else {
-                "unknown"
+                val anyActive = prefs.getActivePenalty()
+                if (anyActive != null) {
+                    pendingDestination.value = Screen.LearningGate.createRoute(anyActive.packageName)
+                } else {
+                    Log.w(TAG, "Ignored Learning Gate navigation for unmonitored or inactive package: $sanitizedPackage")
+                }
             }
-            pendingDestination.value = Screen.LearningGate.createRoute(sanitizedPackage)
         } else if (action == "com.example.doomscroller.ACTION_INTERRUPTION" || dest == "interruption") {
-            val rawPackage = intent.getStringExtra("packageName") ?: ""
-            val sanitizedPackage = if (rawPackage.matches(Regex("^[a-zA-Z0-9_.]+$"))) {
-                rawPackage
+            val prefs = PreferencesManager(this)
+            val rule = prefs.getRule(sanitizedPackage)
+            if (rule != null && rule.isEnabled) {
+                pendingDestination.value = Screen.Interruption.createRoute(sanitizedPackage)
             } else {
-                "unknown"
+                Log.w(TAG, "Ignored Interruption navigation for unmonitored package: $sanitizedPackage")
             }
-            pendingDestination.value = Screen.Interruption.createRoute(sanitizedPackage)
         }
     }
 }

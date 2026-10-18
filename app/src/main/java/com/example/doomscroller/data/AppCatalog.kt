@@ -32,7 +32,8 @@ class AppCatalog(private val context: Context) {
                 if (packageName == context.packageName) return@mapNotNull null // Exclude ourselves
 
                 val name = resolveInfo.loadLabel(pm).toString()
-                InstalledApp(packageName, name, null)
+                val icon = try { resolveInfo.loadIcon(pm) } catch (e: Exception) { null }
+                InstalledApp(packageName, name, icon)
             }
             .distinctBy { it.packageName }
             .sortedBy { it.name.lowercase() }

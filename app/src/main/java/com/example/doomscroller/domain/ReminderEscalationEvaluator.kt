@@ -139,7 +139,7 @@ class ReminderEscalationEvaluator {
         // 2. If app is NOT in the foreground
         if (!isForeground) {
             // Timer and counters do not increment when app is in the background or user switches away
-            return session.copy(qualifyingUsageMillis = currentUsageMillis) to EscalationDecision.NoAction
+            return session to EscalationDecision.NoAction
         }
 
         // 3. App is currently in the foreground
