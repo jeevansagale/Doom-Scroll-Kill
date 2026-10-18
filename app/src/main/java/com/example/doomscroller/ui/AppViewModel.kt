@@ -15,6 +15,8 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.launch
 
 import com.example.doomscroller.data.PenaltyInfo
+import com.example.doomscroller.data.ReminderSession
+import com.example.doomscroller.domain.AnswerResult
 import com.example.doomscroller.domain.EnforcementManager
 import com.example.doomscroller.platform.UsageMonitoringService
 
@@ -150,6 +152,18 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         return enforcementManager.getAppName(packageName)
     }
     
+    fun getOrInitLearningSession(packageName: String): ReminderSession {
+        return enforcementManager.getOrInitLearningSession(packageName)
+    }
+
+    fun submitLearningAnswer(packageName: String, questionId: String, selectedOption: String): AnswerResult {
+        return enforcementManager.submitLearningAnswer(packageName, questionId, selectedOption)
+    }
+
+    fun checkAndReleaseRestriction(packageName: String): Boolean {
+        return enforcementManager.checkAndReleaseRestriction(packageName)
+    }
+
     fun refreshUsage() {
         if (_hasUsageAccess.value) {
             viewModelScope.launch(Dispatchers.IO) {

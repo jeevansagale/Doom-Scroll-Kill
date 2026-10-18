@@ -68,6 +68,7 @@ fun DashboardScreen(
     onAddAppClick: () -> Unit,
     onAppClick: (String) -> Unit,
     onSettingsClick: () -> Unit,
+    onRecommendationGuidanceClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val rules by viewModel.rules.collectAsState()
@@ -395,6 +396,52 @@ fun DashboardScreen(
                         usedMinutes = usedMinutes, 
                         onClick = { onAppClick(rule.packageName) }
                     )
+                }
+            }
+
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 16.dp)
+                        .border(BorderStroke(2.dp, BauhausBlack), RoundedCornerShape(0.dp))
+                        .clickable { onRecommendationGuidanceClick() },
+                    colors = CardDefaults.cardColors(containerColor = BauhausMuted),
+                    shape = RoundedCornerShape(0.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                text = "ALGORITHM CURATION GUIDANCE",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Black,
+                                    color = BauhausBlue,
+                                    letterSpacing = 1.sp
+                                )
+                            )
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Learn how to reset or curate YouTube and Instagram recommendations toward intentional focus topics.",
+                                style = MaterialTheme.typography.bodySmall.copy(color = BauhausBlack)
+                            )
+                        }
+                        Box(
+                            modifier = Modifier
+                                .size(28.dp)
+                                .background(BauhausYellow)
+                                .border(BorderStroke(1.5.dp, BauhausBlack), RoundedCornerShape(0.dp)),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "→",
+                                style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Black)
+                            )
+                        }
+                    }
                 }
             }
 

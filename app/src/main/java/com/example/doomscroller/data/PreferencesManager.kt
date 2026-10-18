@@ -27,6 +27,10 @@ enum class EnforcementState {
     ESCALATION_DUE,
     ENFORCING,
     COOLDOWN,
+    LEARNING_GATE_REQUIRED,
+    LEARNING_GATE_IN_PROGRESS,
+    LEARNING_GATE_COMPLETED,
+    RESTRICTION_RELEASED,
     RECOVERED
 }
 
@@ -41,13 +45,20 @@ data class ReminderSession(
     val enforcementStartTimeMillis: Long = 0L,
     val enforcementEndTimeMillis: Long = 0L,
     val currentState: EnforcementState = EnforcementState.MONITORING,
-    val hasEnforcedThisEpisode: Boolean = false
+    val hasEnforcedThisEpisode: Boolean = false,
+    val activeQuoteId: String? = null,
+    val learningQuestions: List<String> = emptyList(),
+    val answeredQuestions: List<String> = emptyList(),
+    val isLearningGateCompleted: Boolean = false
 ) {
     val isPenaltyExpired: Boolean
         get() = isEnforcementActive && System.currentTimeMillis() >= enforcementEndTimeMillis
 
     val remainingCooldownMillis: Long
         get() = if (isEnforcementActive) (enforcementEndTimeMillis - System.currentTimeMillis()).coerceAtLeast(0L) else 0L
+
+    val isRestrictionSatisfied: Boolean
+        get() = isLearningGateCompleted && isPenaltyExpired
 }
 
 class PreferencesManager(context: Context) : com.example.doomscroller.domain.NotificationPolicyPreferences {
@@ -313,7 +324,34 @@ class PreferencesManager(context: Context) : com.example.doomscroller.domain.Not
             } else {
                 active
             }
-            return ReminderSession(pkg, usage, count, ignored, lastTime, ack, active, start, end, state, hasEnforced)
+            val quoteId = if (parts.size >= 12 && parts[11].isNotBlank()) parts[11] else null
+            val learningQuestions = if (parts.size >= 13 && parts[12].isNotBlank()) {
+                parts[12].split("|").filter { it.isNotBlank() }
+            } else emptyList()
+            val answeredQuestions = if (parts.size >= 14 && parts[13].isNotBlank()) {
+                parts[13].split("|").filter { it.isNotBlank() }
+            } else emptyList()
+            val isLearningCompleted = if (parts.size >= 15) {
+                parts[14].toBooleanStrictOrNull() ?: false
+            } else false
+
+            return ReminderSession(
+                packageName = pkg,
+                qualifyingUsageMillis = usage,
+                reminderCount = count,
+                ignoredCount = ignored,
+                lastReminderTimeMillis = lastTime,
+                isAcknowledged = ack,
+                isEnforcementActive = active,
+                enforcementStartTimeMillis = start,
+                enforcementEndTimeMillis = end,
+                currentState = state,
+                hasEnforcedThisEpisode = hasEnforced,
+                activeQuoteId = quoteId,
+                learningQuestions = learningQuestions,
+                answeredQuestions = answeredQuestions,
+                isLearningGateCompleted = isLearningCompleted
+            )
         }
         return null
     }
@@ -324,10 +362,13 @@ class PreferencesManager(context: Context) : com.example.doomscroller.domain.Not
     }
 
     fun saveReminderSession(session: ReminderSession) {
+        val quoteStr = session.activeQuoteId ?: ""
+        val questionsStr = session.learningQuestions.joinToString("|")
+        val answeredStr = session.answeredQuestions.joinToString("|")
         val serialized = "${session.packageName};${session.qualifyingUsageMillis};${session.reminderCount};" +
                 "${session.ignoredCount};${session.lastReminderTimeMillis};${session.isAcknowledged};" +
                 "${session.isEnforcementActive};${session.enforcementStartTimeMillis};${session.enforcementEndTimeMillis};" +
-                "${session.currentState.name};${session.hasEnforcedThisEpisode}"
+                "${session.currentState.name};${session.hasEnforcedThisEpisode};$quoteStr;$questionsStr;$answeredStr;${session.isLearningGateCompleted}"
         prefs.edit().putString("session_${session.packageName}", serialized).apply()
     }
 

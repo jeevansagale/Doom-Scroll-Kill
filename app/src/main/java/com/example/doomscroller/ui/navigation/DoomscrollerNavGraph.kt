@@ -19,8 +19,10 @@ import com.example.doomscroller.ui.screens.ChooseAppsScreen
 import com.example.doomscroller.ui.screens.DashboardScreen
 import com.example.doomscroller.ui.screens.HistorySettingsScreen
 import com.example.doomscroller.ui.screens.InterruptionScreen
+import com.example.doomscroller.ui.screens.LearningGateScreen
 import com.example.doomscroller.ui.screens.OnboardingScreen
 import com.example.doomscroller.ui.screens.PermissionSetupScreen
+import com.example.doomscroller.ui.screens.RecommendationGuidanceScreen
 
 @Composable
 fun DoomscrollerNavGraph(
@@ -90,6 +92,9 @@ fun DoomscrollerNavGraph(
                 },
                 onSettingsClick = {
                     navController.navigate(Screen.HistorySettings.route)
+                },
+                onRecommendationGuidanceClick = {
+                    navController.navigate(Screen.RecommendationGuidance.route)
                 }
             )
         }
@@ -136,6 +141,35 @@ fun DoomscrollerNavGraph(
                     navController.navigate(Screen.Dashboard.route) {
                         popUpTo(Screen.Dashboard.route) { inclusive = true }
                     }
+                }
+            )
+        }
+
+        composable(route = Screen.LearningGate.route) { backStackEntry ->
+            val packageName = backStackEntry.arguments?.getString("packageName") ?: ""
+            LearningGateScreen(
+                packageName = packageName,
+                viewModel = appViewModel,
+                onLeaveAppClick = {
+                    val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+                        addCategory(Intent.CATEGORY_HOME)
+                        flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                    }
+                    context.startActivity(homeIntent)
+                    (context as? Activity)?.moveTaskToBack(true)
+                },
+                onGateCompleted = {
+                    navController.navigate(Screen.Dashboard.route) {
+                        popUpTo(Screen.Dashboard.route) { inclusive = true }
+                    }
+                }
+            )
+        }
+
+        composable(route = Screen.RecommendationGuidance.route) {
+            RecommendationGuidanceScreen(
+                onBackClick = {
+                    navController.popBackStack()
                 }
             )
         }

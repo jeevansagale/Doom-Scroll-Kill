@@ -276,12 +276,13 @@ class ReminderEscalationEvaluatorTest {
     }
 
     @Test
-    fun `scenario 7 - penalty cooldown expiration resets enforcement state`() {
+    fun `scenario 7 - penalty cooldown expiration requires learning gate completion to release restriction`() {
         val packageName = "com.instagram.android"
         val penaltyStart = 1000000L
         val penaltyEnd = penaltyStart + 5 * 60 * 1000L
 
-        val penalizedSession = ReminderSession(
+        // Penalty session where learning gate is NOT yet completed
+        val penalizedSessionIncomplete = ReminderSession(
             packageName = packageName,
             qualifyingUsageMillis = 20 * 60 * 1000L,
             reminderCount = 4,
@@ -290,13 +291,32 @@ class ReminderEscalationEvaluatorTest {
             isEnforcementActive = true,
             enforcementStartTimeMillis = penaltyStart,
             enforcementEndTimeMillis = penaltyEnd,
-            currentState = com.example.doomscroller.data.EnforcementState.COOLDOWN,
-            hasEnforcedThisEpisode = true
+            currentState = com.example.doomscroller.data.EnforcementState.LEARNING_GATE_REQUIRED,
+            hasEnforcedThisEpisode = true,
+            isLearningGateCompleted = false
         )
 
-        // 1 second after penalty expires: COOLDOWN -> RECOVERED -> MONITORING
-        val (resetSession, decision) = evaluator.evaluate(
-            session = penalizedSession,
+        // 1 second after penalty expires: learning gate is NOT completed -> restriction remains ACTIVE
+        val (sessionStillActive, decisionStillActive) = evaluator.evaluate(
+            session = penalizedSessionIncomplete,
+            isForeground = true,
+            currentUsageMillis = 20 * 60 * 1000L,
+            intervalMinutes = 5,
+            ignoredLimit = 3,
+            now = penaltyEnd + 1000L
+        )
+        assertTrue("Decision must be NoAction because learning gate is incomplete", decisionStillActive is EscalationDecision.NoAction)
+        assertTrue("Enforcement must remain active", sessionStillActive.isEnforcementActive)
+
+        // Now user completes learning gate
+        val penalizedSessionCompleted = penalizedSessionIncomplete.copy(
+            isLearningGateCompleted = true,
+            answeredQuestions = listOf("q1", "q2")
+        )
+
+        // Both conditions met: cooldown elapsed AND learning gate completed -> restriction released!
+        val (resetSession, decisionReleased) = evaluator.evaluate(
+            session = penalizedSessionCompleted,
             isForeground = true,
             currentUsageMillis = 20 * 60 * 1000L,
             intervalMinutes = 5,
@@ -304,9 +324,9 @@ class ReminderEscalationEvaluatorTest {
             now = penaltyEnd + 1000L
         )
 
-        assertTrue("Decision must be PenaltyExpired upon expiry", decision is EscalationDecision.PenaltyExpired)
-        assertEquals(packageName, (decision as EscalationDecision.PenaltyExpired).packageName)
-        assertFalse("Enforcement must be inactive after cooldown", resetSession.isEnforcementActive)
+        assertTrue("Decision must be PenaltyExpired upon dual condition completion", decisionReleased is EscalationDecision.PenaltyExpired)
+        assertEquals(packageName, (decisionReleased as EscalationDecision.PenaltyExpired).packageName)
+        assertFalse("Enforcement must be inactive after release", resetSession.isEnforcementActive)
         assertEquals(0, resetSession.ignoredCount)
         assertEquals(0, resetSession.reminderCount)
         assertEquals(com.example.doomscroller.data.EnforcementState.MONITORING, resetSession.currentState)
@@ -315,7 +335,7 @@ class ReminderEscalationEvaluatorTest {
     }
 
     @Test
-    fun `scenario 8 - complete 7-state lifecycle transition verification`() {
+    fun `scenario 8 - complete learning gate lifecycle and dual condition release`() {
         val packageName = "com.instagram.android"
         val intervalMinutes = 5
         val intervalMillis = 5 * 60 * 1000L
@@ -369,28 +389,58 @@ class ReminderEscalationEvaluatorTest {
         )
         assertTrue(dEnforce is EscalationDecision.TriggerEnforcement)
         assertEquals(com.example.doomscroller.data.EnforcementState.ENFORCING, sEnforcing.currentState)
+        assertEquals(2, sEnforcing.learningQuestions.size)
+        assertTrue(sEnforcing.activeQuoteId != null)
 
-        // 6. Action dispatched -> COOLDOWN
-        val sCooldown = evaluator.markEnforced(sEnforcing)
-        assertEquals(com.example.doomscroller.data.EnforcementState.COOLDOWN, sCooldown.currentState)
-        assertTrue(sCooldown.hasEnforcedThisEpisode)
+        // 6. Action dispatched -> LEARNING_GATE_REQUIRED
+        val sGateRequired = evaluator.markEnforced(sEnforcing)
+        assertEquals(com.example.doomscroller.data.EnforcementState.LEARNING_GATE_REQUIRED, sGateRequired.currentState)
+        assertTrue(sGateRequired.hasEnforcedThisEpisode)
 
-        // 7. Polling while penalty active maintains COOLDOWN and avoids duplicate actions
+        // 7. User answers Question 1 incorrectly -> does NOT advance count
+        val q1Id = sGateRequired.learningQuestions[0]
+        val (sAfterWrong, wrongResult) = evaluator.submitAnswer(sGateRequired, q1Id, "Wrong Option Definitely")
+        assertFalse(wrongResult.isCorrect)
+        assertFalse(wrongResult.isCompleted)
+        assertEquals(0, wrongResult.correctCount)
+        assertEquals(0, sAfterWrong.answeredQuestions.size)
+
+        // 8. User answers Question 1 correctly -> advances to 1/2
+        val q1 = com.example.doomscroller.domain.learning.QuestionBank.getQuestionById(q1Id)!!
+        val (sAfterQ1, q1Result) = evaluator.submitAnswer(sAfterWrong, q1Id, q1.correctAnswer)
+        assertTrue(q1Result.isCorrect)
+        assertFalse(q1Result.isCompleted)
+        assertEquals(1, q1Result.correctCount)
+        assertEquals(1, sAfterQ1.answeredQuestions.size)
+        assertEquals(com.example.doomscroller.data.EnforcementState.LEARNING_GATE_IN_PROGRESS, sAfterQ1.currentState)
+
+        // 9. User answers Question 2 correctly -> completes gate!
+        val q2Id = sAfterQ1.learningQuestions[1]
+        val q2 = com.example.doomscroller.domain.learning.QuestionBank.getQuestionById(q2Id)!!
+        val (sAfterQ2, q2Result) = evaluator.submitAnswer(sAfterQ1, q2Id, q2.correctAnswer)
+        assertTrue(q2Result.isCorrect)
+        assertTrue(q2Result.isCompleted)
+        assertEquals(2, q2Result.correctCount)
+        assertTrue(sAfterQ2.isLearningGateCompleted)
+        assertEquals(com.example.doomscroller.data.EnforcementState.LEARNING_GATE_COMPLETED, sAfterQ2.currentState)
+
+        // 10. While penalty cooldown is STILL active (only 2 mins passed) -> restriction remains ACTIVE
+        now += 2 * 60 * 1000L
         val (sMidCooldown, dMid) = evaluator.evaluate(
-            session = sCooldown,
+            session = sAfterQ2,
             isForeground = true,
             currentUsageMillis = 3 * intervalMillis + 60_000L,
             intervalMinutes = intervalMinutes,
             ignoredLimit = ignoredLimit,
-            now = now + 60_000L
+            now = now
         )
         assertTrue(dMid is EscalationDecision.NoAction)
-        assertEquals(com.example.doomscroller.data.EnforcementState.COOLDOWN, sMidCooldown.currentState)
+        assertTrue(sMidCooldown.isEnforcementActive)
 
-        // 8. Penalty expires -> RECOVERED -> MONITORING
-        now += 5 * 60 * 1000L + 1000L
+        // 11. Penalty duration elapses (now >= enforcementEndTimeMillis) AND learning gate is completed -> RESTRICTION_RELEASED -> MONITORING
+        now += 4 * 60 * 1000L
         val (sRecovered, dExpired) = evaluator.evaluate(
-            session = sCooldown,
+            session = sMidCooldown,
             isForeground = true,
             currentUsageMillis = 3 * intervalMillis + 120_000L,
             intervalMinutes = intervalMinutes,
@@ -403,5 +453,38 @@ class ReminderEscalationEvaluatorTest {
         assertFalse(sRecovered.hasEnforcedThisEpisode)
         assertEquals(0, sRecovered.ignoredCount)
         assertEquals(0, sRecovered.reminderCount)
+        assertEquals(0, sRecovered.answeredQuestions.size)
+        assertFalse(sRecovered.isLearningGateCompleted)
+    }
+
+    @Test
+    fun `scenario 9 - learning question bank and quote engine validation`() {
+        // Verify question bank has verified questions
+        val allQ = com.example.doomscroller.domain.learning.QuestionBank.allQuestions
+        assertTrue("Bank must have at least 20 questions", allQ.size >= 20)
+        allQ.forEach { q ->
+            assertEquals("Each question must have exactly 4 options", 4, q.options.size)
+            assertTrue("Correct answer must be present in options", q.options.contains(q.correctAnswer))
+            assertTrue("Explanation must not be blank", q.explanation.isNotBlank())
+        }
+
+        // Verify distinct selection
+        val selected = com.example.doomscroller.domain.learning.QuestionBank.selectDistinctQuestions(2)
+        assertEquals(2, selected.size)
+        assertTrue("Selected questions must be distinct", selected[0].id != selected[1].id)
+
+        // Verify motivational quotes
+        val allQuotes = com.example.doomscroller.domain.quotes.MotivationalQuoteEngine.allQuotes
+        assertTrue("Quote bank must have at least 25 quotes", allQuotes.size >= 25)
+        allQuotes.forEach { q ->
+            assertTrue("Quote text must not be blank", q.text.isNotBlank())
+            assertTrue("Author must not be blank", q.author.isNotBlank())
+        }
+
+        // Verify contextual quote resolution
+        val igQuote = com.example.doomscroller.domain.quotes.MotivationalQuoteEngine.getQuoteForPackage("com.instagram.android")
+        assertTrue(igQuote.text.isNotBlank())
+        val ytQuote = com.example.doomscroller.domain.quotes.MotivationalQuoteEngine.getQuoteForPackage("com.google.android.youtube")
+        assertTrue(ytQuote.text.isNotBlank())
     }
 }

@@ -66,11 +66,11 @@ class MainActivity : ComponentActivity() {
                     }
                 }
 
-                // Listen for in-app warning triggers to display warning screen without duplication
+                // Listen for in-app warning triggers to display learning gate screen without duplication
                 LaunchedEffect(Unit) {
                     enforcementManager.enforcementEvents.collect { event ->
                         if (event is EnforcementEvent.WarningTriggered) {
-                            val targetRoute = Screen.Interruption.createRoute(event.packageName)
+                            val targetRoute = Screen.LearningGate.createRoute(event.packageName)
                             val currentRoute = navController.currentBackStackEntry?.destination?.route
                             if (currentRoute != targetRoute) {
                                 Log.i(TAG, "In-app WarningTriggered received for ${event.packageName}. Navigating to $targetRoute")
@@ -110,7 +110,15 @@ class MainActivity : ComponentActivity() {
         val action = intent.action
         val dest = intent.getStringExtra("destination")
         Log.i(TAG, "handleIntent: action=$action, dest=$dest")
-        if (action == "com.example.doomscroller.ACTION_INTERRUPTION" || dest == "interruption") {
+        if (action == "com.example.doomscroller.ACTION_LEARNING_GATE" || dest == "learning_gate") {
+            val rawPackage = intent.getStringExtra("packageName") ?: ""
+            val sanitizedPackage = if (rawPackage.matches(Regex("^[a-zA-Z0-9_.]+$"))) {
+                rawPackage
+            } else {
+                "unknown"
+            }
+            pendingDestination.value = Screen.LearningGate.createRoute(sanitizedPackage)
+        } else if (action == "com.example.doomscroller.ACTION_INTERRUPTION" || dest == "interruption") {
             val rawPackage = intent.getStringExtra("packageName") ?: ""
             val sanitizedPackage = if (rawPackage.matches(Regex("^[a-zA-Z0-9_.]+$"))) {
                 rawPackage

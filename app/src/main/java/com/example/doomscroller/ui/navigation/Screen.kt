@@ -18,4 +18,11 @@ sealed class Screen(val route: String) {
             return "interruption/$safePackage"
         }
     }
+    object LearningGate : Screen("learning_gate/{packageName}") {
+        fun createRoute(packageName: String): String {
+            val safePackage = if (packageName.isBlank()) "unknown" else java.net.URLEncoder.encode(packageName, "UTF-8")
+            return "learning_gate/$safePackage"
+        }
+    }
+    object RecommendationGuidance : Screen("recommendation_guidance")
 }

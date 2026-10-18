@@ -11,6 +11,8 @@ import com.example.doomscroller.data.PreferencesManager
 import com.example.doomscroller.data.ReminderSession
 import com.example.doomscroller.platform.NotificationCoordinator
 import com.example.doomscroller.platform.PermissionManager
+import com.example.doomscroller.domain.learning.QuestionBank
+import com.example.doomscroller.domain.quotes.MotivationalQuoteEngine
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharedFlow
@@ -136,6 +138,23 @@ class EnforcementManager private constructor(private val context: Context) {
                 _enforcementEvents.tryEmit(EnforcementEvent.PenaltyExpired(pkg))
                 Log.i(TAG, "Active penalty for $pkg expired at $now. Cleared active penalty, reset baseline ($usedMillis ms), and resumed monitoring.")
             } else if (foregroundPackage == pkg) {
+                // Monitored package observed returning to foreground during active restriction!
+                // Attempt direct redirection to Learning Gate if overlay is permitted
+                if (permissionManager.hasOverlayPermission()) {
+                    try {
+                        val gateIntent = Intent(context, MainActivity::class.java).apply {
+                            action = "com.example.doomscroller.ACTION_LEARNING_GATE"
+                            putExtra("destination", "learning_gate")
+                            putExtra("packageName", pkg)
+                            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
+                        }
+                        context.startActivity(gateIntent)
+                        Log.i(TAG, "Re-launched Learning Gate directly over restricted app $pkg")
+                    } catch (e: Exception) {
+                        Log.e(TAG, "Failed to re-launch Learning Gate overlay for $pkg", e)
+                    }
+                }
+
                 // User is actively in this penalized package; check rate limiter before repeating notification!
                 val appName = getAppName(pkg)
                 val usedMinutes = ((usageMap[pkg] ?: 0L) / 60000L).toInt()
@@ -318,19 +337,19 @@ class EnforcementManager private constructor(private val context: Context) {
                 } else if (destPkg != null && !isDestValid) {
                     Log.w(TAG, "Configured destination app $destPkg is uninstalled or disabled. Showing warning fallback.")
                 } else {
-                    // No destination app configured: fallback to Interruption warning activity if overlay granted
+                    // No destination app configured: fallback to Learning Gate activity if overlay granted
                     if (permissionManager.hasOverlayPermission()) {
                         try {
-                            val warningIntent = Intent(context, MainActivity::class.java).apply {
-                                action = "com.example.doomscroller.ACTION_INTERRUPTION"
-                                putExtra("destination", "interruption")
+                            val gateIntent = Intent(context, MainActivity::class.java).apply {
+                                action = "com.example.doomscroller.ACTION_LEARNING_GATE"
+                                putExtra("destination", "learning_gate")
                                 putExtra("packageName", foregroundPackage)
                                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
                             }
-                            context.startActivity(warningIntent)
-                            Log.i(TAG, "Overlay permission granted: launched warning screen directly over $foregroundPackage")
+                            context.startActivity(gateIntent)
+                            Log.i(TAG, "Overlay permission granted: launched Learning Gate screen directly over $foregroundPackage")
                         } catch (e: Exception) {
-                            Log.e(TAG, "Failed to launch warning screen directly with overlay permission", e)
+                            Log.e(TAG, "Failed to launch Learning Gate screen directly with overlay permission", e)
                         }
                     }
                 }
@@ -431,5 +450,74 @@ class EnforcementManager private constructor(private val context: Context) {
         } catch (e: Exception) {
             packageName
         }
+    }
+
+    fun getReminderSession(packageName: String): ReminderSession {
+        return prefs.getReminderSession(packageName)
+    }
+
+    fun getOrInitLearningSession(packageName: String): ReminderSession {
+        var session = prefs.getReminderSession(packageName)
+        var modified = false
+        if (session.learningQuestions.isEmpty()) {
+            val qList = QuestionBank.selectDistinctQuestions(2).map { it.id }
+            session = session.copy(learningQuestions = qList)
+            modified = true
+        }
+        if (session.activeQuoteId == null) {
+            val q = MotivationalQuoteEngine.getQuoteForPackage(packageName).id
+            session = session.copy(activeQuoteId = q)
+            modified = true
+        }
+        if (modified) {
+            prefs.saveReminderSession(session)
+        }
+        return session
+    }
+
+    @Synchronized
+    fun submitLearningAnswer(
+        packageName: String,
+        questionId: String,
+        selectedOption: String
+    ): AnswerResult {
+        val session = getOrInitLearningSession(packageName)
+        val (updatedSession, result) = reminderEscalationEvaluator.submitAnswer(
+            session = session,
+            questionId = questionId,
+            selectedOption = selectedOption
+        )
+        prefs.saveReminderSession(updatedSession)
+        Log.i(TAG, "Answer submitted for $packageName: correct=${result.isCorrect}, completed=${result.isCompleted}")
+        return result
+    }
+
+    @Synchronized
+    fun checkAndReleaseRestriction(packageName: String): Boolean {
+        val session = prefs.getReminderSession(packageName)
+        val now = System.currentTimeMillis()
+        if (session.isRestrictionSatisfied) {
+            val (resetSession, _) = reminderEscalationEvaluator.evaluate(
+                session = session,
+                isForeground = false,
+                currentUsageMillis = session.qualifyingUsageMillis,
+                intervalMinutes = 5,
+                ignoredLimit = prefs.getIgnoredReminderLimit(),
+                now = now
+            )
+            prefs.saveReminderSession(resetSession)
+            prefs.clearActivePenalty(packageName)
+            val updatedMap = _activePenalties.value.toMutableMap()
+            updatedMap.remove(packageName)
+            _activePenalties.value = updatedMap
+            _activePenalty.value = updatedMap.values.firstOrNull()
+            notificationCoordinator.cancelWarningNotification(packageName)
+            rateLimiter.onConditionEnded(packageName)
+            _enforcementEvents.tryEmit(EnforcementEvent.PenaltyExpired(packageName))
+            Log.i(TAG, "Dual condition satisfied: Released restriction for $packageName and resumed monitoring.")
+            return true
+        }
+        Log.i(TAG, "Cannot release restriction for $packageName yet (learningGateCompleted=${session.isLearningGateCompleted}, penaltyExpired=${session.isPenaltyExpired})")
+        return false
     }
 }

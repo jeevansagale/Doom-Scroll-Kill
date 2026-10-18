@@ -187,17 +187,17 @@ class NotificationCoordinator(private val context: Context) {
         try {
             val notificationId = getNotificationId(packageName)
 
-            // Intent to open Interruption Screen
-            val openInterruptionIntent = Intent(context, MainActivity::class.java).apply {
-                action = "com.example.doomscroller.ACTION_INTERRUPTION"
-                putExtra("destination", "interruption")
+            // Intent to open Learning Gate Screen
+            val openGateIntent = Intent(context, MainActivity::class.java).apply {
+                action = "com.example.doomscroller.ACTION_LEARNING_GATE"
+                putExtra("destination", "learning_gate")
                 putExtra("packageName", packageName)
                 flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP
             }
             val openPendingIntent = PendingIntent.getActivity(
                 context,
                 notificationId,
-                openInterruptionIntent,
+                openGateIntent,
                 PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
             )
 
@@ -233,7 +233,7 @@ class NotificationCoordinator(private val context: Context) {
             val countdownStr = String.format("%02d:%02d", remainingMin, remainingSec)
 
             val title = if (isPenaltyActive) {
-                "Penalty Cooldown: $appName Limit Exceeded"
+                "Learning Gate Required: $appName"
             } else {
                 "Limit Reached: $appName"
             }
@@ -241,15 +241,15 @@ class NotificationCoordinator(private val context: Context) {
             val body = if (isPenaltyActive) {
                 val ignoredNotice = if (ignoredRemindersCount > 0) " ($ignoredRemindersCount reminders ignored)." else "."
                 if (destPendingIntent != null && !destinationAppName.isNullOrBlank()) {
-                    "Usage limit exceeded$ignoredNotice 5-minute cooldown active ($countdownStr remaining). Tap to switch to $destinationAppName."
+                    "Cooldown active ($countdownStr remaining)$ignoredNotice Complete the Learning Gate or switch to $destinationAppName."
                 } else {
-                    "Usage limit exceeded$ignoredNotice 5-minute cooldown active ($countdownStr remaining). Stop scrolling and step away."
+                    "Cooldown active ($countdownStr remaining)$ignoredNotice Answer 2 educational questions in the Learning Gate to unlock."
                 }
             } else {
                 "Daily limit of ${limitMinutes}m reached (${usedMinutes}m used). Take a break."
             }
 
-            val primaryContentIntent = destPendingIntent ?: openPendingIntent
+            val primaryContentIntent = openPendingIntent
 
             val builder = NotificationCompat.Builder(context, CHANNEL_WARNINGS)
                 .setSmallIcon(R.drawable.ic_notification_eye)
@@ -263,6 +263,13 @@ class NotificationCoordinator(private val context: Context) {
                 .setFullScreenIntent(primaryContentIntent, true) // Heads-up / full-screen intent
                 .setAutoCancel(false)
                 .setOngoing(isPenaltyActive)
+
+            // Add Learning Gate action
+            builder.addAction(
+                android.R.drawable.ic_menu_edit,
+                "Answer Questions",
+                openPendingIntent
+            )
 
             // Add Destination App action if available
             if (destPendingIntent != null && !destinationAppName.isNullOrBlank()) {
@@ -278,11 +285,6 @@ class NotificationCoordinator(private val context: Context) {
                 android.R.drawable.ic_menu_close_clear_cancel,
                 "Exit to Home Screen",
                 leavePendingIntent
-            )
-            builder.addAction(
-                android.R.drawable.ic_menu_info_details,
-                "View Warning",
-                openPendingIntent
             )
 
             notificationManager.notify(notificationId, builder.build())

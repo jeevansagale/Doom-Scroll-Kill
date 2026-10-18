@@ -3,6 +3,8 @@ package com.example.doomscroller.domain
 import android.util.Log
 import com.example.doomscroller.data.EnforcementState
 import com.example.doomscroller.data.ReminderSession
+import com.example.doomscroller.domain.learning.QuestionBank
+import com.example.doomscroller.domain.quotes.MotivationalQuoteEngine
 
 sealed class EscalationDecision {
     object NoAction : EscalationDecision()
@@ -23,6 +25,14 @@ sealed class EscalationDecision {
     ) : EscalationDecision()
 }
 
+data class AnswerResult(
+    val isCorrect: Boolean,
+    val explanation: String,
+    val isCompleted: Boolean,
+    val correctCount: Int,
+    val totalRequired: Int = 2
+)
+
 class ReminderEscalationEvaluator {
     companion object {
         private const val TAG = "EnforcementStateMachine"
@@ -42,7 +52,9 @@ class ReminderEscalationEvaluator {
      * Evaluates the reminder and escalation state machine for a monitored package.
      *
      * State Machine Lifecycle:
-     * MONITORING -> REMINDER_DUE -> REMINDER_SENT -> ESCALATION_DUE -> ENFORCING -> COOLDOWN -> RECOVERED -> MONITORING
+     * MONITORING -> REMINDER_DUE -> REMINDER_SENT -> ESCALATION_DUE -> ENFORCING ->
+     * LEARNING_GATE_REQUIRED -> LEARNING_GATE_IN_PROGRESS -> LEARNING_GATE_COMPLETED ->
+     * RESTRICTION_RELEASED -> RECOVERED -> MONITORING
      *
      * @param session Current persisted session state for the package.
      * @param isForeground Whether the package is currently in the foreground.
@@ -61,21 +73,35 @@ class ReminderEscalationEvaluator {
     ): Pair<ReminderSession, EscalationDecision> {
         val intervalMillis = intervalMinutes * 60 * 1000L
 
-        // 1. If currently in COOLDOWN or enforcement penalty is active
-        if (session.currentState == EnforcementState.COOLDOWN || session.isEnforcementActive) {
-            if (now >= session.enforcementEndTimeMillis) {
-                // Penalty cooldown completed: COOLDOWN -> RECOVERED -> MONITORING
+        // 1. If currently in enforcement / cooldown / learning gate
+        if (session.isEnforcementActive || session.currentState == EnforcementState.COOLDOWN ||
+            session.currentState == EnforcementState.LEARNING_GATE_REQUIRED ||
+            session.currentState == EnforcementState.LEARNING_GATE_IN_PROGRESS ||
+            session.currentState == EnforcementState.LEARNING_GATE_COMPLETED) {
+
+            val isTimerExpired = now >= session.enforcementEndTimeMillis
+            val isLearningCompleted = session.isLearningGateCompleted
+
+            // The restriction remains active until BOTH the configured penalty duration has elapsed
+            // AND the learning gate is successfully completed.
+            if (isTimerExpired && isLearningCompleted) {
                 logTransition(
                     session.packageName,
                     session.currentState,
+                    EnforcementState.RESTRICTION_RELEASED,
+                    "Dual conditions satisfied: penalty cooldown elapsed ($now >= ${session.enforcementEndTimeMillis}) and learning gate completed"
+                )
+                logTransition(
+                    session.packageName,
+                    EnforcementState.RESTRICTION_RELEASED,
                     EnforcementState.RECOVERED,
-                    "Enforcement penalty duration elapsed ($now >= ${session.enforcementEndTimeMillis})"
+                    "Resetting baseline to current usage ($currentUsageMillis ms) and resuming monitoring cycle"
                 )
                 logTransition(
                     session.packageName,
                     EnforcementState.RECOVERED,
                     EnforcementState.MONITORING,
-                    "Resetting baseline to current usage ($currentUsageMillis ms) and resuming monitoring cycle"
+                    "Resuming active monitoring"
                 )
                 val resetSession = ReminderSession(
                     packageName = session.packageName,
@@ -88,13 +114,23 @@ class ReminderEscalationEvaluator {
                     enforcementStartTimeMillis = 0L,
                     enforcementEndTimeMillis = 0L,
                     currentState = EnforcementState.MONITORING,
-                    hasEnforcedThisEpisode = false
+                    hasEnforcedThisEpisode = false,
+                    activeQuoteId = null,
+                    learningQuestions = emptyList(),
+                    answeredQuestions = emptyList(),
+                    isLearningGateCompleted = false
                 )
                 return resetSession to EscalationDecision.PenaltyExpired(session.packageName)
             } else {
-                // Cooldown still active: prevent duplicate actions while the same enforcement event remains active
-                val updatedSession = if (session.currentState != EnforcementState.COOLDOWN) {
-                    session.copy(currentState = EnforcementState.COOLDOWN)
+                // Restriction remains active: update state reflection if needed
+                val targetState = when {
+                    session.isLearningGateCompleted -> EnforcementState.LEARNING_GATE_COMPLETED
+                    session.answeredQuestions.isNotEmpty() -> EnforcementState.LEARNING_GATE_IN_PROGRESS
+                    session.hasEnforcedThisEpisode -> EnforcementState.LEARNING_GATE_REQUIRED
+                    else -> session.currentState
+                }
+                val updatedSession = if (session.currentState != targetState) {
+                    session.copy(currentState = targetState)
                 } else session
                 return updatedSession to EscalationDecision.NoAction
             }
@@ -156,16 +192,23 @@ class ReminderEscalationEvaluator {
                     session.packageName,
                     EnforcementState.ESCALATION_DUE,
                     EnforcementState.ENFORCING,
-                    "Activating penalty enforcement"
+                    "Activating penalty enforcement and selecting learning questions"
                 )
                 val penaltyEnd = now + PENALTY_COOLDOWN_MILLIS
+                val selectedQuote = MotivationalQuoteEngine.getQuoteForPackage(session.packageName).id
+                val selectedQuestions = QuestionBank.selectDistinctQuestions(2).map { it.id }
+
                 val escalatedSession = session.copy(
                     ignoredCount = newIgnoredCount,
                     isEnforcementActive = true,
                     enforcementStartTimeMillis = now,
                     enforcementEndTimeMillis = penaltyEnd,
                     currentState = EnforcementState.ENFORCING,
-                    hasEnforcedThisEpisode = false
+                    hasEnforcedThisEpisode = false,
+                    activeQuoteId = selectedQuote,
+                    learningQuestions = selectedQuestions,
+                    answeredQuestions = emptyList(),
+                    isLearningGateCompleted = false
                 )
                 return escalatedSession to EscalationDecision.TriggerEnforcement(
                     packageName = session.packageName,
@@ -218,18 +261,85 @@ class ReminderEscalationEvaluator {
 
     /**
      * Called when the configured enforcement action has been executed.
-     * Transitions: ENFORCING -> COOLDOWN
+     * Transitions: ENFORCING -> LEARNING_GATE_REQUIRED
      */
     fun markEnforced(session: ReminderSession): ReminderSession {
         logTransition(
             session.packageName,
             session.currentState,
-            EnforcementState.COOLDOWN,
-            "Enforcement action dispatched; entering COOLDOWN until ${session.enforcementEndTimeMillis}"
+            EnforcementState.LEARNING_GATE_REQUIRED,
+            "Enforcement action dispatched; learning gate required until 2 questions completed and cooldown elapses (${session.enforcementEndTimeMillis})"
         )
         return session.copy(
-            currentState = EnforcementState.COOLDOWN,
+            currentState = EnforcementState.LEARNING_GATE_REQUIRED,
             hasEnforcedThisEpisode = true
+        )
+    }
+
+    /**
+     * Validates and submits an answer to a learning gate question.
+     * Exactly 2 distinct questions must be answered correctly.
+     * Incorrect answers do NOT advance the counter and return the concise explanation.
+     */
+    fun submitAnswer(
+        session: ReminderSession,
+        questionId: String,
+        selectedOption: String
+    ): Pair<ReminderSession, AnswerResult> {
+        val question = QuestionBank.getQuestionById(questionId)
+        if (question == null) {
+            return session to AnswerResult(
+                isCorrect = false,
+                explanation = "Invalid question reference.",
+                isCompleted = session.isLearningGateCompleted,
+                correctCount = session.answeredQuestions.size
+            )
+        }
+
+        val isCorrect = question.validateAnswer(selectedOption)
+        if (!isCorrect) {
+            // Incorrect answer: do not advance count, show explanation
+            val updated = session.copy(currentState = EnforcementState.LEARNING_GATE_IN_PROGRESS)
+            return updated to AnswerResult(
+                isCorrect = false,
+                explanation = question.explanation,
+                isCompleted = false,
+                correctCount = session.answeredQuestions.size
+            )
+        }
+
+        // Correct answer
+        val updatedAnswered = if (session.answeredQuestions.contains(questionId)) {
+            session.answeredQuestions
+        } else {
+            session.answeredQuestions + questionId
+        }
+
+        val isCompleted = updatedAnswered.size >= 2
+        val newState = if (isCompleted) {
+            EnforcementState.LEARNING_GATE_COMPLETED
+        } else {
+            EnforcementState.LEARNING_GATE_IN_PROGRESS
+        }
+
+        logTransition(
+            session.packageName,
+            session.currentState,
+            newState,
+            "Answered question $questionId correctly (${updatedAnswered.size}/2 completed)"
+        )
+
+        val updatedSession = session.copy(
+            answeredQuestions = updatedAnswered,
+            isLearningGateCompleted = isCompleted,
+            currentState = newState
+        )
+
+        return updatedSession to AnswerResult(
+            isCorrect = true,
+            explanation = question.explanation,
+            isCompleted = isCompleted,
+            correctCount = updatedAnswered.size
         )
     }
 
