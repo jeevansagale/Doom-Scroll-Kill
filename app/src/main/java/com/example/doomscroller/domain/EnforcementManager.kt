@@ -469,8 +469,10 @@ class EnforcementManager private constructor(private val context: Context) {
             modified = true
         }
         if (session.activeQuoteId == null) {
-            val q = MotivationalQuoteEngine.getQuoteForPackage(packageName).id
-            session = session.copy(activeQuoteId = q)
+            val lastId = prefs.getLastDisplayedQuoteId()
+            val quote = MotivationalQuoteEngine.getQuoteForPackage(packageName, excludeId = lastId)
+            prefs.saveLastDisplayedQuoteId(quote.id)
+            session = session.copy(activeQuoteId = quote.id)
             modified = true
         }
         if (modified) {

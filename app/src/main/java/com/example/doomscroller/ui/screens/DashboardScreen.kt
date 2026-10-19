@@ -75,6 +75,9 @@ fun DashboardScreen(
     val hasUsageAccess by viewModel.hasUsageAccess.collectAsState()
     val hasNotificationPermission by viewModel.hasNotificationPermission.collectAsState()
     val todayUsage by viewModel.todayUsage.collectAsState()
+    val totalExternalUsageMillis by viewModel.totalExternalUsageMillis.collectAsState()
+    val usageDataState by viewModel.usageDataState.collectAsState()
+    val sessionQuote by viewModel.sessionQuote.collectAsState()
     val installedApps by viewModel.installedApps.collectAsState()
     val activePenalty by viewModel.activePenalty.collectAsState()
     
@@ -85,8 +88,9 @@ fun DashboardScreen(
         }
     }
     
-    val totalUsedMillis = rules.sumOf { rule -> todayUsage[rule.packageName] ?: 0L }
-    val totalUsedMinutes = (totalUsedMillis / 1000 / 60).toInt()
+    val monitoredUsedMillis = rules.sumOf { rule -> todayUsage[rule.packageName] ?: 0L }
+    val monitoredUsedMinutes = (monitoredUsedMillis / 1000 / 60).toInt()
+    val totalExternalMinutes = (totalExternalUsageMillis / 1000 / 60).toInt()
     val appNamesByPackage = remember(installedApps) { installedApps.associate { it.packageName to it.name } }
 
     Scaffold(
@@ -186,7 +190,7 @@ fun DashboardScreen(
                             verticalAlignment = Alignment.CenterVertically
                         ) {
                             Text(
-                                text = "TOTAL SCREEN TIME",
+                                text = "DEVICE SCREEN TIME (TODAY)",
                                 style = MaterialTheme.typography.labelLarge.copy(
                                     color = BauhausYellow,
                                     fontWeight = FontWeight.Black
@@ -208,20 +212,61 @@ fun DashboardScreen(
                             horizontalArrangement = Arrangement.SpaceBetween
                         ) {
                             Column {
-                                Text(
-                                    text = "${totalUsedMinutes / 60}H ${totalUsedMinutes % 60}M",
-                                    style = MaterialTheme.typography.displayLarge.copy(
-                                        fontWeight = FontWeight.Black,
-                                        color = BauhausBlack
-                                    )
-                                )
-                                Text(
-                                    text = "ACCUMULATED ACROSS MONITORED TARGETS",
-                                    style = MaterialTheme.typography.labelSmall.copy(
-                                        color = BauhausBlack.copy(alpha = 0.7f),
-                                        fontWeight = FontWeight.Bold
-                                    )
-                                )
+                                when (usageDataState) {
+                                    is com.example.doomscroller.data.monitor.UsageDataState.PermissionRequired -> {
+                                        Text(
+                                            text = "--",
+                                            style = MaterialTheme.typography.displayLarge.copy(
+                                                fontWeight = FontWeight.Black,
+                                                color = BauhausRed
+                                            )
+                                        )
+                                        Text(
+                                            text = "USAGE ACCESS PERMISSION REQUIRED",
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                color = BauhausRed,
+                                                fontWeight = FontWeight.Black
+                                            )
+                                        )
+                                    }
+                                    is com.example.doomscroller.data.monitor.UsageDataState.QueryFailed -> {
+                                        Text(
+                                            text = "UNAVAILABLE",
+                                            style = MaterialTheme.typography.displayMedium.copy(
+                                                fontWeight = FontWeight.Black,
+                                                color = BauhausBlack
+                                            )
+                                        )
+                                        Text(
+                                            text = "USAGE DATA INACCESSIBLE",
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                color = BauhausBlack.copy(alpha = 0.7f),
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        )
+                                    }
+                                    is com.example.doomscroller.data.monitor.UsageDataState.Success -> {
+                                        Text(
+                                            text = "${totalExternalMinutes / 60}H ${totalExternalMinutes % 60}M",
+                                            style = MaterialTheme.typography.displayLarge.copy(
+                                                fontWeight = FontWeight.Black,
+                                                color = BauhausBlack
+                                            )
+                                        )
+                                        val subtitle = if (monitoredUsedMinutes > 0) {
+                                            "EXTERNAL DEVICE APPS • ${monitoredUsedMinutes}M IN ${rules.size} MONITORED TARGETS"
+                                        } else {
+                                            "EXTERNAL DEVICE USAGE • EXCLUDES DOOMSCROLLER"
+                                        }
+                                        Text(
+                                            text = subtitle,
+                                            style = MaterialTheme.typography.labelSmall.copy(
+                                                color = BauhausBlack.copy(alpha = 0.7f),
+                                                fontWeight = FontWeight.Bold
+                                            )
+                                        )
+                                    }
+                                }
                             }
                             Box(
                                 modifier = Modifier
@@ -229,6 +274,72 @@ fun DashboardScreen(
                                     .background(BauhausBlue)
                             )
                         }
+                    }
+                }
+            }
+
+            // Bauhaus Mindful Quote of the Session (Full width)
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .border(BorderStroke(2.dp, BauhausBlack), RoundedCornerShape(0.dp)),
+                    colors = CardDefaults.cardColors(containerColor = BauhausCanvas),
+                    shape = RoundedCornerShape(0.dp)
+                ) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Row(
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(8.dp)
+                                        .background(BauhausRed)
+                                )
+                                Spacer(modifier = Modifier.width(8.dp))
+                                Text(
+                                    text = "MINDFULNESS & INTENTION",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.Black,
+                                        color = BauhausBlack,
+                                        letterSpacing = 1.sp
+                                    )
+                                )
+                            }
+                            Box(
+                                modifier = Modifier
+                                    .background(BauhausBlack)
+                                    .padding(horizontal = 6.dp, vertical = 2.dp)
+                            ) {
+                                Text(
+                                    text = sessionQuote.category.displayName.uppercase(),
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        color = Color.White,
+                                        fontWeight = FontWeight.Bold
+                                    )
+                                )
+                            }
+                        }
+                        Spacer(modifier = Modifier.height(10.dp))
+                        Text(
+                            text = "“${sessionQuote.text}”",
+                            style = MaterialTheme.typography.bodyMedium.copy(
+                                fontWeight = FontWeight.Bold,
+                                color = BauhausBlack,
+                                lineHeight = 20.sp
+                            )
+                        )
+                        Spacer(modifier = Modifier.height(6.dp))
+                        Text(
+                            text = "— ${sessionQuote.author.uppercase()}",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                color = BauhausBlack.copy(alpha = 0.7f),
+                                fontWeight = FontWeight.Bold
+                            )
+                        )
                     }
                 }
             }

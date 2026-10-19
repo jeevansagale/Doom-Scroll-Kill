@@ -195,7 +195,10 @@ class ReminderEscalationEvaluator {
                     "Activating penalty enforcement and selecting learning questions"
                 )
                 val penaltyEnd = now + PENALTY_COOLDOWN_MILLIS
-                val selectedQuote = MotivationalQuoteEngine.getQuoteForPackage(session.packageName).id
+                val selectedQuote = MotivationalQuoteEngine.getQuoteForPackage(
+                    session.packageName,
+                    excludeId = session.activeQuoteId
+                ).id
                 val selectedQuestions = QuestionBank.selectDistinctQuestions(2).map { it.id }
 
                 val escalatedSession = session.copy(

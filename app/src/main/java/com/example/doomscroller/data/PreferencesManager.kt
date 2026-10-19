@@ -399,4 +399,14 @@ class PreferencesManager(context: Context) : com.example.doomscroller.domain.Not
         }
         return map
     }
+
+    // --- Quote Rotation Persistence ---
+    fun getLastDisplayedQuoteId(): String? {
+        val id = prefs.getString("pref_last_displayed_quote_id", null)
+        return if (id.isNullOrBlank()) null else id
+    }
+
+    fun saveLastDisplayedQuoteId(quoteId: String) {
+        prefs.edit().putString("pref_last_displayed_quote_id", quoteId).apply()
+    }
 }

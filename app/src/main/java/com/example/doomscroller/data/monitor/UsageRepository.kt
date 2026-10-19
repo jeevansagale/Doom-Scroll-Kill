@@ -5,105 +5,183 @@ import android.app.usage.UsageStatsManager
 import android.content.Context
 import android.util.ArrayMap
 import android.util.Log
+import com.example.doomscroller.platform.PermissionManager
 import java.time.LocalDate
 import java.time.ZoneId
 
+sealed class UsageDataState {
+    object PermissionRequired : UsageDataState()
+    data class QueryFailed(val errorMessage: String) : UsageDataState()
+    data class Success(
+        val date: LocalDate,
+        val dayStartMillis: Long,
+        val totalExternalUsageMillis: Long,
+        val isEventsBased: Boolean
+    ) : UsageDataState()
+}
+
 data class UsageSnapshot(
     val usageMap: Map<String, Long>,
-    val foregroundPackage: String?
+    val foregroundPackage: String?,
+    val totalExternalUsageMillis: Long = 0L,
+    val state: UsageDataState = UsageDataState.Success(
+        date = LocalDate.now(),
+        dayStartMillis = 0L,
+        totalExternalUsageMillis = totalExternalUsageMillis,
+        isEventsBased = true
+    ),
+    val isAvailable: Boolean = true
 )
 
 class UsageRepository(private val context: Context) {
     companion object {
         private const val TAG = "UsageRepository"
         private const val CACHE_TTL_MS = 2500L
-        private const val RECENT_EVENTS_WINDOW_MS = 60_000L // 60s rolling window for foreground detection
+        private const val LOOKBACK_WINDOW_MS = 15 * 60 * 1000L // 15 mins lookback to establish foreground app at midnight
     }
 
-    private val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as UsageStatsManager
+    private val usageStatsManager = context.getSystemService(Context.USAGE_STATS_SERVICE) as? UsageStatsManager
+    private val permissionManager = PermissionManager(context)
+    private val selfPackageName = context.packageName
 
     @Volatile
     private var lastQueryTime = 0L
     @Volatile
-    private var cachedSnapshot: UsageSnapshot = UsageSnapshot(emptyMap(), null)
+    private var cachedLocalDate: LocalDate? = null
+    @Volatile
+    private var cachedSnapshot: UsageSnapshot = UsageSnapshot(
+        usageMap = emptyMap(),
+        foregroundPackage = null,
+        totalExternalUsageMillis = 0L,
+        state = UsageDataState.PermissionRequired,
+        isAvailable = false
+    )
 
     fun getTodayUsage(forceRefresh: Boolean = false): Map<String, Long> {
         return getUsageSnapshot(forceRefresh).usageMap
     }
 
     fun getUsageSnapshot(forceRefresh: Boolean = false): UsageSnapshot {
+        // 1. Explicitly check system-granted Usage Access permission
+        if (!permissionManager.hasUsageAccess() || usageStatsManager == null) {
+            val unavailSnapshot = UsageSnapshot(
+                usageMap = emptyMap(),
+                foregroundPackage = null,
+                totalExternalUsageMillis = 0L,
+                state = UsageDataState.PermissionRequired,
+                isAvailable = false
+            )
+            cachedSnapshot = unavailSnapshot
+            return unavailSnapshot
+        }
+
         val now = System.currentTimeMillis()
-        if (!forceRefresh && now - lastQueryTime < CACHE_TTL_MS && cachedSnapshot.usageMap.isNotEmpty()) {
+        val zoneId = ZoneId.systemDefault()
+        val today = LocalDate.now(zoneId)
+        val startOfDay = UsageCalculator.getLocalDayStartMillis(today, zoneId)
+
+        // 2. Return cache only if within TTL, date has not changed, and data is valid
+        if (!forceRefresh &&
+            (now - lastQueryTime < CACHE_TTL_MS) &&
+            (cachedLocalDate == today) &&
+            cachedSnapshot.isAvailable
+        ) {
             return cachedSnapshot
         }
 
-        val startOfDay = LocalDate.now().atStartOfDay(ZoneId.systemDefault()).toInstant().toEpochMilli()
-
-        // 1. Fast path: Query daily aggregates precomputed by Android OS
-        val usageMap = ArrayMap<String, Long>()
         try {
-            val dailyStats = usageStatsManager.queryUsageStats(
-                UsageStatsManager.INTERVAL_DAILY,
-                startOfDay,
-                now
-            )
-            if (!dailyStats.isNullOrEmpty()) {
-                for (stat in dailyStats) {
-                    if (stat.totalTimeInForeground > 0) {
-                        val current = usageMap[stat.packageName] ?: 0L
-                        usageMap[stat.packageName] = maxOf(current, stat.totalTimeInForeground)
-                    }
-                }
-            }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error querying daily usage stats", e)
-        }
+            // 3. Event-based tracking from midnight with lookback window
+            val queryStart = (startOfDay - LOOKBACK_WINDOW_MS).coerceAtLeast(0L)
+            val events = usageStatsManager.queryEvents(queryStart, now)
+            val rawEvents = mutableListOf<RawUsageEvent>()
+            var latestForeground: String? = null
 
-        // 2. Query only recent events (last 60s) for real-time foreground detection
-        var currentForeground: String? = null
-        var foregroundStartTime = 0L
-        val recentStart = (now - RECENT_EVENTS_WINDOW_MS).coerceAtLeast(startOfDay)
-
-        try {
-            val events = usageStatsManager.queryEvents(recentStart, now)
-            val event = UsageEvents.Event()
-            while (events.hasNextEvent()) {
-                events.getNextEvent(event)
-                val packageName = event.packageName ?: continue
-                when (event.eventType) {
-                    UsageEvents.Event.ACTIVITY_RESUMED -> {
-                        currentForeground = packageName
-                        foregroundStartTime = event.timeStamp
-                    }
-                    UsageEvents.Event.ACTIVITY_PAUSED, UsageEvents.Event.ACTIVITY_STOPPED -> {
-                        if (currentForeground == packageName) {
-                            currentForeground = null
-                            foregroundStartTime = 0L
+            if (events != null) {
+                val event = UsageEvents.Event()
+                while (events.hasNextEvent()) {
+                    events.getNextEvent(event)
+                    val pkg = event.packageName ?: continue
+                    rawEvents.add(
+                        RawUsageEvent(
+                            packageName = pkg,
+                            timeStamp = event.timeStamp,
+                            eventType = event.eventType
+                        )
+                    )
+                    when (event.eventType) {
+                        UsageEvents.Event.ACTIVITY_RESUMED -> latestForeground = pkg
+                        UsageEvents.Event.ACTIVITY_PAUSED -> {
+                            if (latestForeground == pkg) latestForeground = null
+                        }
+                        UsageEvents.Event.SCREEN_NON_INTERACTIVE, UsageEvents.Event.KEYGUARD_SHOWN -> {
+                            latestForeground = null
                         }
                     }
                 }
             }
-        } catch (e: Exception) {
-            Log.e(TAG, "Error querying recent UsageEvents", e)
-        }
 
-        // If recent window didn't capture a transition and dailyStats was empty, fallback to cached foreground
-        if (currentForeground == null && cachedSnapshot.foregroundPackage != null) {
-            currentForeground = cachedSnapshot.foregroundPackage
-        }
+            // 4. Compute accurate event-based usage (excludes selfPackageName and yesterday's usage)
+            val usageMap = ArrayMap<String, Long>()
+            val calculatedMap = UsageCalculator.computeUsageFromEvents(
+                events = rawEvents,
+                startOfDayMillis = startOfDay,
+                nowMillis = now,
+                selfPackageName = selfPackageName
+            )
+            usageMap.putAll(calculatedMap)
 
-        // Add real-time live elapsed delta for the active foreground application
-        if (currentForeground != null && foregroundStartTime > 0L) {
-            val sessionDuration = (now - foregroundStartTime).coerceAtLeast(0L)
-            if (sessionDuration > 0) {
-                val previousTotal = usageMap[currentForeground] ?: 0L
-                usageMap[currentForeground] = previousTotal + sessionDuration
+            var isEventsBased = rawEvents.isNotEmpty()
+
+            // 5. Fallback path if UsageEvents returned empty (e.g. system pruned events after reboot)
+            if (usageMap.isEmpty()) {
+                val dailyStats = usageStatsManager.queryUsageStats(
+                    UsageStatsManager.INTERVAL_DAILY,
+                    startOfDay,
+                    now
+                )
+                if (!dailyStats.isNullOrEmpty()) {
+                    for (stat in dailyStats) {
+                        val pkg = stat.packageName
+                        if (pkg != null && pkg != selfPackageName && stat.totalTimeInForeground > 0L) {
+                            val current = usageMap[pkg] ?: 0L
+                            usageMap[pkg] = maxOf(current, stat.totalTimeInForeground)
+                        }
+                    }
+                    isEventsBased = false
+                }
             }
-        }
 
-        lastQueryTime = now
-        val snapshot = UsageSnapshot(usageMap = usageMap, foregroundPackage = currentForeground)
-        cachedSnapshot = snapshot
-        return snapshot
+            // If latest foreground package is selfPackageName, keep foregroundPackage accurate for service,
+            // but selfPackageName is strictly excluded from usageMap and external total.
+            val totalExternalUsage = usageMap.values.sum()
+
+            lastQueryTime = now
+            cachedLocalDate = today
+            val snapshot = UsageSnapshot(
+                usageMap = usageMap,
+                foregroundPackage = latestForeground,
+                totalExternalUsageMillis = totalExternalUsage,
+                state = UsageDataState.Success(
+                    date = today,
+                    dayStartMillis = startOfDay,
+                    totalExternalUsageMillis = totalExternalUsage,
+                    isEventsBased = isEventsBased
+                ),
+                isAvailable = true
+            )
+            cachedSnapshot = snapshot
+            return snapshot
+        } catch (e: Exception) {
+            Log.e(TAG, "Error calculating device usage stats", e)
+            val failedSnapshot = UsageSnapshot(
+                usageMap = emptyMap(),
+                foregroundPackage = null,
+                totalExternalUsageMillis = 0L,
+                state = UsageDataState.QueryFailed(e.message ?: "Unknown query failure"),
+                isAvailable = false
+            )
+            cachedSnapshot = failedSnapshot
+            return failedSnapshot
+        }
     }
 }

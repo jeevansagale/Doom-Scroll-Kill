@@ -1,6 +1,17 @@
 package com.example.doomscroller.domain.learning
 
 enum class QuestionCategory(val displayName: String) {
+    // Reflection & Digital Wellbeing categories
+    INTENTIONAL_VS_HABITUAL("Intentional vs Habitual Use"),
+    TRIGGERS_AND_BOREDOM("Triggers & Boredom"),
+    FOCUS_AND_INTERRUPTIONS("Focus & Interruptions"),
+    TIME_AND_PRIORITIES("Time Awareness & Priorities"),
+    SLEEP_AND_ROUTINES("Sleep & Routines"),
+    RELATIONSHIPS_AND_PRESENCE("Relationships & Presence"),
+    MOOD_AND_EMOTIONS("Mood & Emotional Regulation"),
+    GOALS_AND_ALTERNATIVES("Personal Goals & Offline Alternatives"),
+
+    // Technical categories preserved for backwards compatibility
     DSA("Data Structures & Algorithms"),
     PROGRAMMING("Programming Languages"),
     COMPUTER_SCIENCE("Computer Science Fundamentals"),

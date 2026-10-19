@@ -36,6 +36,14 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _todayUsage = MutableStateFlow<Map<String, Long>>(emptyMap())
     val todayUsage: StateFlow<Map<String, Long>> = _todayUsage
 
+    private val _totalExternalUsageMillis = MutableStateFlow(0L)
+    val totalExternalUsageMillis: StateFlow<Long> = _totalExternalUsageMillis
+
+    private val _usageDataState = MutableStateFlow<com.example.doomscroller.data.monitor.UsageDataState>(
+        com.example.doomscroller.data.monitor.UsageDataState.PermissionRequired
+    )
+    val usageDataState: StateFlow<com.example.doomscroller.data.monitor.UsageDataState> = _usageDataState
+
     private val _hasUsageAccess = MutableStateFlow(false)
     val hasUsageAccess: StateFlow<Boolean> = _hasUsageAccess
 
@@ -58,6 +66,17 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     val destinationPackage: StateFlow<String?> = _destinationPackage
 
     val activePenalty: StateFlow<PenaltyInfo?> = enforcementManager.activePenalty
+
+    // Session quote initialized once per launch/process session and persisted to prevent immediate repetition
+    private val _sessionQuote: MutableStateFlow<com.example.doomscroller.domain.quotes.MotivationalQuote> = run {
+        val lastId = prefs.getLastDisplayedQuoteId()
+        val quote = com.example.doomscroller.domain.quotes.MotivationalQuoteEngine.getNextSessionQuote(lastId)
+        prefs.saveLastDisplayedQuoteId(quote.id)
+        MutableStateFlow(quote)
+    }
+    val sessionQuote: StateFlow<com.example.doomscroller.domain.quotes.MotivationalQuote> = _sessionQuote
+
+    private var lastRecordedDate: java.time.LocalDate = java.time.LocalDate.now()
 
     init {
         checkPermissions()
@@ -164,17 +183,29 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
         return enforcementManager.checkAndReleaseRestriction(packageName)
     }
 
-    fun refreshUsage() {
-        if (_hasUsageAccess.value) {
-            viewModelScope.launch(Dispatchers.IO) {
-                val snapshot = usageRepository.getUsageSnapshot()
-                _todayUsage.value = snapshot.usageMap
-                enforcementManager.evaluateRules(
-                    usageMap = snapshot.usageMap,
-                    rules = _rules.value,
-                    foregroundPackage = snapshot.foregroundPackage
-                )
-            }
+    fun refreshUsage(forceRefresh: Boolean = false) {
+        if (!_hasUsageAccess.value) {
+            _usageDataState.value = com.example.doomscroller.data.monitor.UsageDataState.PermissionRequired
+            _todayUsage.value = emptyMap()
+            _totalExternalUsageMillis.value = 0L
+            return
+        }
+
+        viewModelScope.launch(Dispatchers.IO) {
+            val today = java.time.LocalDate.now()
+            val force = forceRefresh || (today != lastRecordedDate)
+            lastRecordedDate = today
+
+            val snapshot = usageRepository.getUsageSnapshot(forceRefresh = force)
+            _todayUsage.value = snapshot.usageMap
+            _totalExternalUsageMillis.value = snapshot.totalExternalUsageMillis
+            _usageDataState.value = snapshot.state
+
+            enforcementManager.evaluateRules(
+                usageMap = snapshot.usageMap,
+                rules = _rules.value,
+                foregroundPackage = snapshot.foregroundPackage
+            )
         }
     }
 }

@@ -1,7 +1,7 @@
 # Testing Strategy & Architecture — Doomscroller
 
 ## 1. Overview
-Doomscroller enforces digital wellbeing quotas and penalty cooldowns using a deterministic finite state machine, dual-condition restriction gates (5-minute cooldown + educational quiz completion), and strict intent validation. This document details the testing architecture, suites, edge cases, and continuous verification workflows.
+Doomscroller enforces digital wellbeing quotas and penalty cooldowns using a deterministic finite state machine, dual-condition restriction gates (5-minute cooldown + educational quiz completion), strict intent validation, and event-based Android usage tracking aligned with Android Digital Wellbeing. This document details the testing architecture, suites, edge cases, and continuous verification workflows.
 
 ---
 
@@ -10,10 +10,12 @@ Doomscroller enforces digital wellbeing quotas and penalty cooldowns using a det
 - **Test Runner**: JUnit 4 (`testImplementation(libs.junit)`)
 - **Execution Target**: Local JVM (`./gradlew testDebugUnitTest`)
 - **Target Subsystems**:
+  - `UsageCalculator` & `UsageRepository`: Event-based foreground tracking from local midnight, exclusion of Doomscroll own package, screen-off/lock pauses, timezone/DST boundaries, and unavailable state handling.
+  - `MotivationalQuoteEngine` & `QuestionBank`: Rotation across application sessions without immediate repeats, content validation (50+ quotes, 50+ questions, zero empty fields, unique IDs).
   - `ReminderEscalationEvaluator`: Finite state machine governing usage threshold reminders, consecutive ignored increments, escalation triggers, and post-penalty recovery.
   - `NotificationRateLimiter`: Rolling 15-minute sliding window rate limiting and minimum interval throttling to prevent notification spam.
   - `RuleEvaluator`: Daily usage quota calculations and warning state progressions.
-  - `SecurityAndEdgeCaseTest`: Intent injection sanitization, dual-condition penalty release, self-lockout defense, parameter boundary clamping, screen-off/background attribution, and question bank integrity.
+  - `SecurityAndEdgeCaseTest`: Intent injection sanitization, dual-condition penalty release, self-lockout defense, parameter boundary clamping, screen-off/background attribution.
 
 ---
 
@@ -21,41 +23,54 @@ Doomscroller enforces digital wellbeing quotas and penalty cooldowns using a det
 
 | Test Suite | File | Tests | Status | Key Focus Areas |
 | :--- | :--- | :---: | :---: | :--- |
+| `UsageTrackingAndMidnightTest` | `app/src/test/.../UsageTrackingAndMidnightTest.kt` | 9 | 100% Pass | Self-package exclusion, midnight boundary clipping, yesterday leak prevention, screen-off/lock pauses, DST shifts, permission denial state. |
+| `QuoteRotationAndContentTest` | `app/src/test/.../QuoteRotationAndContentTest.kt` | 7 | 100% Pass | 50+ unique quotes and questions, zero empty fields, unique IDs, safe single-item handling, session rotation without immediate repeat, recomposition stability. |
 | `ReminderEscalationEvaluatorTest` | `app/src/test/.../ReminderEscalationEvaluatorTest.kt` | 9 | 100% Pass | Reminder interval timing, consecutive ignored escalation, educational quiz question verification, recovery after penalty. |
 | `NotificationRateLimiterTest` | `app/src/test/.../NotificationRateLimiterTest.kt` | 12 | 100% Pass | Sliding 15-minute window rate limit cap (default 3), minimum spacing interval (default 5 min), per-package history isolation. |
 | `RuleEvaluatorTest` | `app/src/test/.../RuleEvaluatorTest.kt` | 7 | 100% Pass | Quota threshold detection, warning escalation states, penalty cooldown timestamp calculations. |
 | `EnforcementTest` | `app/src/test/.../EnforcementTest.kt` | 11 | 100% Pass | End-to-end quota escalation flow, repeated warning suppression, expiration reactivation. |
 | `SecurityAndEdgeCaseTest` | `app/src/test/.../SecurityAndEdgeCaseTest.kt` | 12 | 100% Pass | Dual-condition restriction release, intent sanitization, self-lockout prevention, boundary clamping, background transitions, clock skew. |
 | `ExampleUnitTest` | `app/src/test/.../ExampleUnitTest.kt` | 1 | 100% Pass | Sanity check. |
-| **Total** | | **52** | **100% Pass** | **Zero Failures** |
+| **Total** | | **68** | **100% Pass** | **Zero Failures** |
 
 ---
 
 ## 4. Key Edge Cases Verified
 
-1. **Dual-Condition Restriction Release**:
-   - Condition A: Cooldown timer $\ge 5$ minutes has elapsed.
-   - Condition B: User has answered 2 educational questions correctly.
-   - *Result*: Evaluated independently. If timer expires but questions are incomplete, restriction stays active. If questions are solved before timer expires, restriction stays active until cooldown elapses.
-2. **Security & Intent Injection**:
-   - `MainActivity.kt` filters all incoming package strings against `^[a-zA-Z0-9_.]+$`.
-   - Incoming target package must be an actively monitored and restricted rule in `PreferencesManager`. Arbitrary injection attempts are rejected.
-3. **Self-Lockout Prevention**:
-   - `com.example.doomscroller` is prevented from targeting or restricting itself, ensuring the user is never locked out of their wellbeing settings.
-4. **Boundary Clamping**:
-   - Reminder intervals clamped to `1..60` minutes.
-   - Ignored reminder limit clamped to `1..10`.
-   - Rate limit cap clamped to `1..6` notifications per 15 minutes.
-5. **Background Attribution**:
-   - Usage when an app is in the background (`isForeground == false`) does not advance or reset qualifying usage baselines.
-6. **Clock Skew / Backward Time Jump**:
-   - Negative time deltas resulting from manual clock adjustments or NTP sync are handled gracefully without false triggers or exceptions.
-7. **Question Bank Quality**:
-   - Every question in `QuestionBank` contains non-blank ID, text, explanation, and exactly 4 distinct options with the correct answer present.
+1. **Exclusion of Doomscroll's Own Package**:
+   - Time spent inside `com.example.doomscroller` is tracked for internal lifecycle but strictly excluded from external app usage totals and the hero screen time display.
+2. **Midnight Boundary & Zero Leakage**:
+   - `UsageCalculator.computeUsageFromEvents` clamps sessions to `maxOf(sessionStart, startOfDayMillis)`. Sessions crossing midnight only count the minutes that transpired after 00:00 local time.
+3. **Screen-Off & Lock State Transitions**:
+   - Device sleep (`SCREEN_NON_INTERACTIVE`) and keyguard lock (`KEYGUARD_SHOWN`) immediately close active foreground sessions. Pocket / screen-off time is never attributed as screen time.
+4. **Timezone Changes & Daylight Saving Time (DST)**:
+   - Evaluated across multiple world timezones (UTC, America/New_York, Asia/Tokyo, Europe/London).
+   - DST shifts (23-hour spring forward and 25-hour fall back days) calculate the exact local start of day without assuming a rigid 24-hour day length.
+5. **Clear Unavailable / Denied State**:
+   - When Usage Access permission is missing, `UsageRepository` returns `UsageDataState.PermissionRequired`, displaying `--` and an action banner on the dashboard rather than misleading the user with a verified zero.
+6. **Quote Rotation Across Sessions**:
+   - `MotivationalQuoteEngine.getNextSessionQuote(lastId)` filters out the previously displayed quote ID. Recompositions and screen rotations do not alter the session quote. Single-item datasets are handled gracefully without recursion.
+7. **Content Quality & Richness**:
+   - 50 quotes across 6 categories with documented attribution sources and URLs.
+   - 53 questions (48 reflection across 8 categories + legacy technical questions). All questions verified to have non-blank text, exactly 4 distinct options, valid correct answers, and non-blank explanations.
 
 ---
 
-## 5. Execution Commands
+## 5. Digital Wellbeing Comparison Procedure
+
+To validate usage accuracy against Android OS system metrics:
+1. Grant Usage Access via **Settings > Apps > Special App Access > Usage Access > Doomscroller**.
+2. Open target external applications (e.g. YouTube, Instagram, Chrome) for a known duration (e.g. 10 minutes).
+3. Navigate to system **Settings > Digital Wellbeing & Parental Controls**.
+4. Check the total device screen time for today and individual app breakdowns.
+5. Open Doomscroller. Verify that:
+   - "DEVICE SCREEN TIME (TODAY)" closely aligns with Android Digital Wellbeing's total.
+   - Doomscroller's own screen time is omitted from the external total.
+   - Per-app cards reflect individual app foreground durations accurately.
+
+---
+
+## 6. Execution Commands
 
 ### Run All Local Unit & Edge Case Tests
 ```bash
