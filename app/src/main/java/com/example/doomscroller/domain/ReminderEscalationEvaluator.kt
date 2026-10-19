@@ -2,6 +2,7 @@ package com.example.doomscroller.domain
 
 import android.util.Log
 import com.example.doomscroller.data.EnforcementState
+import com.example.doomscroller.data.PendingIntervention
 import com.example.doomscroller.data.ReminderSession
 import com.example.doomscroller.domain.learning.QuestionBank
 import com.example.doomscroller.domain.quotes.MotivationalQuoteEngine
@@ -13,12 +14,15 @@ sealed class EscalationDecision {
         val reminderNumber: Int,
         val ignoredCount: Int,
         val limitCount: Int,
-        val intervalMinutes: Int
+        val intervalMinutes: Int,
+        val eventId: String? = null,
+        val deadlineMillis: Long? = null
     ) : EscalationDecision()
     data class TriggerEnforcement(
         val packageName: String,
         val ignoredCount: Int,
-        val penaltyEndTimeMillis: Long
+        val penaltyEndTimeMillis: Long,
+        val reason: String = "ESCALATION_LIMIT_REACHED"
     ) : EscalationDecision()
     data class PenaltyExpired(
         val packageName: String
@@ -36,7 +40,9 @@ data class AnswerResult(
 class ReminderEscalationEvaluator {
     companion object {
         private const val TAG = "EnforcementStateMachine"
-        const val PENALTY_COOLDOWN_MILLIS = 5 * 60 * 1000L // Fixed 5-minute penalty duration
+        const val DEFAULT_PENALTY_COOLDOWN_MILLIS = 5 * 60 * 1000L
+        const val PENALTY_COOLDOWN_MILLIS = DEFAULT_PENALTY_COOLDOWN_MILLIS // Preserved for backwards compatibility
+        const val ACKNOWLEDGMENT_TIMEOUT_MILLIS = 60 * 1000L // Exact 60-second acknowledgment deadline
     }
 
     private fun logTransition(
@@ -61,6 +67,8 @@ class ReminderEscalationEvaluator {
      * @param currentUsageMillis Total daily or qualifying foreground usage in milliseconds.
      * @param intervalMinutes X — Configured reminder interval in minutes.
      * @param ignoredLimit Z — Configured consecutive ignored reminder limit before escalation.
+     * @param restrictionDurationMinutes Configured restriction cooldown duration in minutes (default: 5).
+     * @param pendingIntervention Active 60-second intervention deadline state if present.
      * @param now Current timestamp in milliseconds.
      */
     fun evaluate(
@@ -69,12 +77,16 @@ class ReminderEscalationEvaluator {
         currentUsageMillis: Long,
         intervalMinutes: Int,
         ignoredLimit: Int,
+        restrictionDurationMinutes: Int = 5,
+        pendingIntervention: PendingIntervention? = null,
         now: Long = System.currentTimeMillis()
     ): Pair<ReminderSession, EscalationDecision> {
         val intervalMillis = intervalMinutes * 60 * 1000L
+        val penaltyCooldownMillis = (if (restrictionDurationMinutes in 1..1440) restrictionDurationMinutes else 5) * 60 * 1000L
 
-        // 1. If currently in enforcement / cooldown / learning gate
+        // 1. If currently in enforcement / cooldown / learning gate / NO_ACK
         if (session.isEnforcementActive || session.currentState == EnforcementState.COOLDOWN ||
+            session.currentState == EnforcementState.NO_ACK ||
             session.currentState == EnforcementState.LEARNING_GATE_REQUIRED ||
             session.currentState == EnforcementState.LEARNING_GATE_IN_PROGRESS ||
             session.currentState == EnforcementState.LEARNING_GATE_COMPLETED) {
@@ -136,6 +148,27 @@ class ReminderEscalationEvaluator {
             }
         }
 
+        // 1.5. Evaluate Pending 60-Second Acknowledgment Deadline
+        if (pendingIntervention != null && !pendingIntervention.isAcknowledged && !pendingIntervention.isTimedOut) {
+            if (now >= pendingIntervention.deadlineMillis) {
+                logTransition(
+                    session.packageName,
+                    session.currentState,
+                    EnforcementState.NO_ACK,
+                    "60-second acknowledgment deadline elapsed without user acknowledgment (eventId=${pendingIntervention.eventId}). Transitioning automatically to NO_ACK."
+                )
+                return transitionToNoAck(
+                    session = session,
+                    eventId = pendingIntervention.eventId,
+                    now = now,
+                    restrictionDurationMinutes = restrictionDurationMinutes
+                )
+            } else {
+                // Still counting down within the 60-second deadline
+                return session to EscalationDecision.NoAction
+            }
+        }
+
         // 2. If app is NOT in the foreground
         if (!isForeground) {
             // Timer and counters do not increment when app is in the background or user switches away
@@ -147,12 +180,14 @@ class ReminderEscalationEvaluator {
         val cycleUsage = (currentUsageMillis - session.qualifyingUsageMillis).coerceAtLeast(0L)
         if (session.reminderCount == 0) {
             if (cycleUsage >= intervalMillis || currentUsageMillis >= intervalMillis) {
-                // First reminder reached: MONITORING -> REMINDER_DUE
+                val eventId = java.util.UUID.randomUUID().toString()
+                val deadlineMillis = now + ACKNOWLEDGMENT_TIMEOUT_MILLIS
+                // First reminder reached: MONITORING -> INTERVENTION_ACTIVE
                 logTransition(
                     session.packageName,
                     session.currentState,
                     EnforcementState.REMINDER_DUE,
-                    "Foreground usage reached configured interval of $intervalMinutes min ($currentUsageMillis ms)"
+                    "Foreground usage reached configured interval of $intervalMinutes min ($currentUsageMillis ms). Starting 60s acknowledgment deadline."
                 )
                 val newSession = session.copy(
                     reminderCount = 1,
@@ -166,7 +201,9 @@ class ReminderEscalationEvaluator {
                     reminderNumber = 1,
                     ignoredCount = 0,
                     limitCount = ignoredLimit,
-                    intervalMinutes = intervalMinutes
+                    intervalMinutes = intervalMinutes,
+                    eventId = eventId,
+                    deadlineMillis = deadlineMillis
                 )
             } else {
                 return session to EscalationDecision.NoAction
@@ -181,7 +218,7 @@ class ReminderEscalationEvaluator {
             val newIgnoredCount = session.ignoredCount + 1
 
             if (newIgnoredCount >= ignoredLimit) {
-                // Escalation limit reached: REMINDER_SENT -> ESCALATION_DUE -> ENFORCING
+                // Escalation limit reached: REMINDER_SENT / INTERVENTION_ACTIVE -> ESCALATION_DUE -> ENFORCING
                 logTransition(
                     session.packageName,
                     session.currentState,
@@ -192,9 +229,9 @@ class ReminderEscalationEvaluator {
                     session.packageName,
                     EnforcementState.ESCALATION_DUE,
                     EnforcementState.ENFORCING,
-                    "Activating penalty enforcement and selecting learning questions"
+                    "Activating penalty enforcement ($restrictionDurationMinutes min) and selecting learning questions"
                 )
-                val penaltyEnd = now + PENALTY_COOLDOWN_MILLIS
+                val penaltyEnd = now + penaltyCooldownMillis
                 val selectedQuote = MotivationalQuoteEngine.getQuoteForPackage(
                     session.packageName,
                     excludeId = session.activeQuoteId
@@ -216,16 +253,19 @@ class ReminderEscalationEvaluator {
                 return escalatedSession to EscalationDecision.TriggerEnforcement(
                     packageName = session.packageName,
                     ignoredCount = newIgnoredCount,
-                    penaltyEndTimeMillis = penaltyEnd
+                    penaltyEndTimeMillis = penaltyEnd,
+                    reason = "ESCALATION_LIMIT_REACHED"
                 )
             } else {
-                // Next repeat reminder: REMINDER_SENT -> REMINDER_DUE
+                // Next repeat reminder: REMINDER_SENT -> INTERVENTION_ACTIVE
                 val nextReminderNumber = session.reminderCount + 1
+                val eventId = java.util.UUID.randomUUID().toString()
+                val deadlineMillis = now + ACKNOWLEDGMENT_TIMEOUT_MILLIS
                 logTransition(
                     session.packageName,
                     session.currentState,
-                    EnforcementState.REMINDER_DUE,
-                    "Repeat interval elapsed: sending reminder #$nextReminderNumber (ignored=$newIgnoredCount/$ignoredLimit)"
+                    EnforcementState.INTERVENTION_ACTIVE,
+                    "Repeat interval elapsed: sending reminder #$nextReminderNumber (ignored=$newIgnoredCount/$ignoredLimit). Starting 60s deadline."
                 )
                 val newSession = session.copy(
                     reminderCount = nextReminderNumber,
@@ -239,7 +279,9 @@ class ReminderEscalationEvaluator {
                     reminderNumber = nextReminderNumber,
                     ignoredCount = newIgnoredCount,
                     limitCount = ignoredLimit,
-                    intervalMinutes = intervalMinutes
+                    intervalMinutes = intervalMinutes,
+                    eventId = eventId,
+                    deadlineMillis = deadlineMillis
                 )
             }
         }
@@ -347,16 +389,91 @@ class ReminderEscalationEvaluator {
     }
 
     /**
-     * User explicitly acknowledges a reminder.
+     * Transitions session to INTERVENTION_ACTIVE upon displaying an intervention.
+     */
+    fun transitionToIntervention(
+        session: ReminderSession,
+        eventId: String,
+        now: Long = System.currentTimeMillis()
+    ): ReminderSession {
+        logTransition(
+            session.packageName,
+            session.currentState,
+            EnforcementState.INTERVENTION_ACTIVE,
+            "Intervention displayed (eventId=$eventId). 60s acknowledgment deadline started."
+        )
+        return session.copy(
+            currentState = EnforcementState.INTERVENTION_ACTIVE,
+            lastReminderTimeMillis = now,
+            isAcknowledged = false
+        )
+    }
+
+    /**
+     * Automatic transition to NO_ACK state upon 60-second deadline expiration without acknowledgment.
+     * Immediately activates the configured restriction and prepares learning questions.
+     */
+    fun transitionToNoAck(
+        session: ReminderSession,
+        eventId: String,
+        now: Long = System.currentTimeMillis(),
+        restrictionDurationMinutes: Int = 5
+    ): Pair<ReminderSession, EscalationDecision.TriggerEnforcement> {
+        val newIgnoredCount = session.ignoredCount + 1
+        val penaltyCooldownMillis = (if (restrictionDurationMinutes in 1..1440) restrictionDurationMinutes else 5) * 60 * 1000L
+        val penaltyEnd = now + penaltyCooldownMillis
+
+        logTransition(
+            session.packageName,
+            session.currentState,
+            EnforcementState.NO_ACK,
+            "No acknowledgment received within 60s deadline (eventId=$eventId). Automatic transition to NO_ACK."
+        )
+        logTransition(
+            session.packageName,
+            EnforcementState.NO_ACK,
+            EnforcementState.ENFORCING,
+            "Activating penalty restriction for $restrictionDurationMinutes minutes ($penaltyEnd)"
+        )
+
+        val selectedQuote = MotivationalQuoteEngine.getQuoteForPackage(
+            session.packageName,
+            excludeId = session.activeQuoteId
+        ).id
+        val selectedQuestions = QuestionBank.selectDistinctQuestions(2).map { it.id }
+
+        val escalatedSession = session.copy(
+            ignoredCount = newIgnoredCount,
+            isEnforcementActive = true,
+            enforcementStartTimeMillis = now,
+            enforcementEndTimeMillis = penaltyEnd,
+            currentState = EnforcementState.NO_ACK,
+            hasEnforcedThisEpisode = false,
+            activeQuoteId = selectedQuote,
+            learningQuestions = selectedQuestions,
+            answeredQuestions = emptyList(),
+            isLearningGateCompleted = false
+        )
+
+        return escalatedSession to EscalationDecision.TriggerEnforcement(
+            packageName = session.packageName,
+            ignoredCount = newIgnoredCount,
+            penaltyEndTimeMillis = penaltyEnd,
+            reason = "NO_ACK_TIMEOUT"
+        )
+    }
+
+    /**
+     * User explicitly acknowledges a reminder or intervention before the 60-second deadline.
      * Resets the consecutive ignored count to 0 and resets the interval timer.
-     * Transitions: REMINDER_DUE / REMINDER_SENT -> MONITORING
+     * Transitions: INTERVENTION_ACTIVE / REMINDER_DUE / REMINDER_SENT -> MONITORING
      */
     fun acknowledge(session: ReminderSession, now: Long = System.currentTimeMillis()): ReminderSession {
         logTransition(
             session.packageName,
             session.currentState,
             EnforcementState.MONITORING,
-            "User acknowledged reminder. Resetting ignored count to 0."
+            "User acknowledged reminder/intervention before deadline. Resetting ignored count to 0."
         )
         return session.copy(
             ignoredCount = 0,

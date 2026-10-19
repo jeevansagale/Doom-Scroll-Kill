@@ -62,6 +62,9 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
     private val _reminderCapPer15Min = MutableStateFlow(prefs.getReminderCapPer15Min())
     val reminderCapPer15Min: StateFlow<Int> = _reminderCapPer15Min
 
+    private val _restrictionDurationMinutes = MutableStateFlow(prefs.getRestrictionDurationMinutes())
+    val restrictionDurationMinutes: StateFlow<Int> = _restrictionDurationMinutes
+
     private val _destinationPackage = MutableStateFlow(prefs.getDestinationPackage())
     val destinationPackage: StateFlow<String?> = _destinationPackage
 
@@ -126,6 +129,12 @@ class AppViewModel(application: Application) : AndroidViewModel(application) {
             UsageMonitoringService.start(getApplication())
             refreshUsage()
         }
+    }
+
+    fun setRestrictionDurationMinutes(minutes: Int) {
+        val clamped = minutes.coerceIn(1, 1440)
+        prefs.setRestrictionDurationMinutes(clamped)
+        _restrictionDurationMinutes.value = clamped
     }
 
     fun setReminderIntervalMinutes(minutes: Int) {

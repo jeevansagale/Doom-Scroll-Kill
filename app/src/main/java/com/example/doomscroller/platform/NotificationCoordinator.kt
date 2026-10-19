@@ -90,7 +90,8 @@ class NotificationCoordinator(private val context: Context) {
         reminderNumber: Int,
         ignoredCount: Int,
         limitCount: Int,
-        intervalMinutes: Int
+        intervalMinutes: Int,
+        eventId: String? = null
     ): Boolean {
         if (!permissionManager.hasNotificationPermission()) {
             Log.w(TAG, "POST_NOTIFICATIONS not granted. Cannot post reminder for $packageName")
@@ -114,6 +115,9 @@ class NotificationCoordinator(private val context: Context) {
             val ackIntent = Intent(context, UsageMonitoringService::class.java).apply {
                 action = "ACTION_ACKNOWLEDGE"
                 putExtra("packageName", packageName)
+                if (eventId != null) {
+                    putExtra("eventId", eventId)
+                }
             }
             val ackPendingIntent = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
                 PendingIntent.getForegroundService(

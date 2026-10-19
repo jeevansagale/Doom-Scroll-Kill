@@ -77,6 +77,7 @@ fun HistorySettingsScreen(
     val reminderInterval by viewModel.reminderIntervalMinutes.collectAsState()
     val ignoredLimit by viewModel.ignoredReminderLimit.collectAsState()
     val reminderCap by viewModel.reminderCapPer15Min.collectAsState()
+    val restrictionDuration by viewModel.restrictionDurationMinutes.collectAsState()
     val hasOverlayPermission by viewModel.hasOverlayPermission.collectAsState()
     val destinationPackage by viewModel.destinationPackage.collectAsState()
     val installedApps by viewModel.installedApps.collectAsState()
@@ -256,7 +257,7 @@ fun HistorySettingsScreen(
                     )
                     Spacer(modifier = Modifier.height(4.dp))
                     Text(
-                        text = "Consecutive reminders that may be ignored before triggering 5-minute cooldown enforcement.",
+                        text = "Consecutive reminders that may be ignored before triggering $restrictionDuration-minute cooldown enforcement.",
                         style = MaterialTheme.typography.bodySmall,
                         color = BauhausBlack.copy(alpha = 0.8f)
                     )
@@ -411,11 +412,172 @@ fun HistorySettingsScreen(
                             .padding(8.dp)
                     ) {
                         Text(
-                            text = "NOTE: The 5-minute penalty cooldown is separate from the reminder interval. At Z ignored reminders, enforcement activates exactly once.",
+                            text = "NOTE: The restriction cooldown is separate from the reminder interval. At Z ignored reminders or on 60s acknowledgment timeout, enforcement activates for the configured duration.",
                             style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Bold),
                             color = BauhausBlack
                         )
                     }
+                }
+            }
+
+            Spacer(modifier = Modifier.height(16.dp))
+
+            // Section 1.1: Restriction Cooldown Duration Configuration
+            Card(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .border(BorderStroke(2.dp, BauhausBlack), RoundedCornerShape(0.dp)),
+                colors = CardDefaults.cardColors(containerColor = BauhausCanvas),
+                shape = RoundedCornerShape(0.dp)
+            ) {
+                Column(modifier = Modifier.padding(16.dp)) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Box(modifier = Modifier.size(8.dp).background(BauhausYellow))
+                        Spacer(modifier = Modifier.width(8.dp))
+                        Text(
+                            text = "RESTRICTION COOLDOWN DURATION",
+                            style = MaterialTheme.typography.labelSmall.copy(
+                                fontWeight = FontWeight.Black,
+                                letterSpacing = 1.sp
+                            )
+                        )
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+
+                    Text(
+                        text = "PENALTY & LEARNING GATE DURATION",
+                        style = MaterialTheme.typography.labelLarge.copy(fontWeight = FontWeight.Black)
+                    )
+                    Spacer(modifier = Modifier.height(4.dp))
+                    Text(
+                        text = "Duration of the educational restriction gate and cooldown period when an intervention times out or limit is exceeded.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = BauhausBlack.copy(alpha = 0.8f)
+                    )
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    // Selected duration display
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Box(
+                            modifier = Modifier
+                                .border(BorderStroke(2.dp, BauhausBlack), RoundedCornerShape(0.dp))
+                                .background(BauhausYellow)
+                                .padding(horizontal = 14.dp, vertical = 8.dp)
+                        ) {
+                            Text(
+                                text = "$restrictionDuration MINUTES",
+                                style = MaterialTheme.typography.titleMedium.copy(
+                                    fontWeight = FontWeight.Black,
+                                    color = BauhausBlack
+                                )
+                            )
+                        }
+
+                        Row {
+                            Button(
+                                onClick = { viewModel.setRestrictionDurationMinutes(restrictionDuration - 1) },
+                                enabled = restrictionDuration > 1,
+                                shape = RoundedCornerShape(0.dp),
+                                border = BorderStroke(1.5.dp, BauhausBlack),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = BauhausCanvas,
+                                    contentColor = BauhausBlack,
+                                    disabledContainerColor = BauhausMuted
+                                )
+                            ) {
+                                Text("-1m", fontWeight = FontWeight.Black)
+                            }
+                            Spacer(modifier = Modifier.width(6.dp))
+                            Button(
+                                onClick = { viewModel.setRestrictionDurationMinutes(restrictionDuration + 1) },
+                                enabled = restrictionDuration < 1440,
+                                shape = RoundedCornerShape(0.dp),
+                                border = BorderStroke(1.5.dp, BauhausBlack),
+                                colors = ButtonDefaults.buttonColors(
+                                    containerColor = BauhausCanvas,
+                                    contentColor = BauhausBlack,
+                                    disabledContainerColor = BauhausMuted
+                                )
+                            ) {
+                                Text("+1m", fontWeight = FontWeight.Black)
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(14.dp))
+
+                    // Presets
+                    Text(
+                        text = "PRACTICAL PRESETS",
+                        style = MaterialTheme.typography.labelSmall.copy(fontWeight = FontWeight.Black)
+                    )
+                    Spacer(modifier = Modifier.height(6.dp))
+
+                    val presets = listOf(1, 5, 10, 15, 30, 60)
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        presets.forEach { preset ->
+                            val isSelected = preset == restrictionDuration
+                            Box(
+                                modifier = Modifier
+                                    .weight(1f)
+                                    .border(
+                                        BorderStroke(if (isSelected) 2.dp else 1.5.dp, BauhausBlack),
+                                        RoundedCornerShape(0.dp)
+                                    )
+                                    .background(if (isSelected) BauhausBlack else BauhausCanvas)
+                                    .clickable { viewModel.setRestrictionDurationMinutes(preset) }
+                                    .padding(vertical = 10.dp),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Text(
+                                    text = "${preset}m",
+                                    style = MaterialTheme.typography.labelMedium.copy(
+                                        fontWeight = FontWeight.Black,
+                                        color = if (isSelected) BauhausYellow else BauhausBlack
+                                    )
+                                )
+                            }
+                        }
+                    }
+
+                    Spacer(modifier = Modifier.height(12.dp))
+
+                    Slider(
+                        value = restrictionDuration.coerceIn(1, 60).toFloat(),
+                        onValueChange = { viewModel.setRestrictionDurationMinutes(it.toInt()) },
+                        valueRange = 1f..60f,
+                        steps = 58,
+                        colors = SliderDefaults.colors(
+                            thumbColor = BauhausBlack,
+                            activeTrackColor = BauhausBlack,
+                            inactiveTrackColor = BauhausMuted
+                        )
+                    )
+
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Text("1m", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                        Text("DEFAULT: 5m", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                        Text("60m", style = MaterialTheme.typography.labelSmall, fontWeight = FontWeight.Bold)
+                    }
+
+                    Spacer(modifier = Modifier.height(8.dp))
+                    Text(
+                        text = "Changes take effect on the next restriction cycle.",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = BauhausBlack.copy(alpha = 0.7f)
+                    )
                 }
             }
 

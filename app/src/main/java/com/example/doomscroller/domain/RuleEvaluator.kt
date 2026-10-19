@@ -19,7 +19,7 @@ sealed class EvaluationResult {
 
 class RuleEvaluator {
     companion object {
-        const val MINIMUM_PENALTY_MILLIS = 5 * 60 * 1000L // 5 minutes minimum penalty
+        const val MINIMUM_PENALTY_MILLIS = 5 * 60 * 1000L // 5 minutes default penalty
         const val MAX_WARNINGS = 3
     }
 
@@ -28,10 +28,13 @@ class RuleEvaluator {
         usedMinutes: Int,
         currentTimeMillis: Long,
         currentDate: LocalDate,
-        previousState: WarningState?
+        previousState: WarningState?,
+        penaltyDurationMinutes: Int = 5
     ): EvaluationResult {
         if (!rule.isEnabled) return EvaluationResult.NoAction
         if (usedMinutes < rule.limitMinutes) return EvaluationResult.NoAction
+
+        val penaltyMillis = (if (penaltyDurationMinutes in 1..1440) penaltyDurationMinutes else 5) * 60 * 1000L
 
         val state = if (previousState == null || previousState.date != currentDate) {
             WarningState(rule.packageName, currentDate, 0, 0, 0L)
@@ -43,7 +46,7 @@ class RuleEvaluator {
             val newState = state.copy(
                 warningCount = 1,
                 lastWarningTimeMillis = currentTimeMillis,
-                penaltyEndTimeMillis = currentTimeMillis + MINIMUM_PENALTY_MILLIS
+                penaltyEndTimeMillis = currentTimeMillis + penaltyMillis
             )
             return EvaluationResult.ShowWarning(newState)
         }
@@ -52,19 +55,18 @@ class RuleEvaluator {
             val newState = state.copy(
                 warningCount = state.warningCount + 1,
                 lastWarningTimeMillis = currentTimeMillis,
-                penaltyEndTimeMillis = currentTimeMillis + MINIMUM_PENALTY_MILLIS
+                penaltyEndTimeMillis = currentTimeMillis + penaltyMillis
             )
             return EvaluationResult.Escalate(newState)
         }
 
-        // Static 5 minute warning interval for MVP
-        val warningIntervalMillis = MINIMUM_PENALTY_MILLIS
+        val warningIntervalMillis = penaltyMillis
         if (currentTimeMillis - state.lastWarningTimeMillis >= warningIntervalMillis) {
             val nextCount = state.warningCount + 1
             val newState = state.copy(
                 warningCount = nextCount,
                 lastWarningTimeMillis = currentTimeMillis,
-                penaltyEndTimeMillis = currentTimeMillis + MINIMUM_PENALTY_MILLIS
+                penaltyEndTimeMillis = currentTimeMillis + penaltyMillis
             )
             return if (newState.warningCount >= MAX_WARNINGS) {
                 EvaluationResult.Escalate(newState)

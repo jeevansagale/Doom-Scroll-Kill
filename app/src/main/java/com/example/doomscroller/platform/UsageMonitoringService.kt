@@ -24,6 +24,7 @@ class UsageMonitoringService : Service() {
     companion object {
         private const val TAG = "UsageMonitoringService"
         private const val SCREEN_ON_POLL_INTERVAL_MS = 10_000L // 10 seconds when user active
+        private const val RESTRICTED_FAST_POLL_INTERVAL_MS = 1_500L // 1.5 seconds when penalty or intervention active
         private const val SCREEN_OFF_POLL_INTERVAL_MS = 60_000L // 60 seconds when screen off
 
         fun start(context: Context) {
@@ -120,9 +121,10 @@ class UsageMonitoringService : Service() {
             }
             "ACTION_ACKNOWLEDGE" -> {
                 val pkg = intent.getStringExtra("packageName")
+                val eventId = intent.getStringExtra("eventId")
                 if (!pkg.isNullOrEmpty()) {
-                    Log.i(TAG, "Received ACTION_ACKNOWLEDGE intent for $pkg")
-                    enforcementManager.acknowledgeReminder(pkg)
+                    Log.i(TAG, "Received ACTION_ACKNOWLEDGE intent for $pkg (eventId=$eventId)")
+                    enforcementManager.acknowledgeIntervention(pkg, eventId)
                 }
             }
         }
@@ -150,9 +152,10 @@ class UsageMonitoringService : Service() {
         monitoringJob = serviceScope.launch {
             Log.i(TAG, "Monitoring loop started on background coroutine")
             while (isActive) {
+                val hasActiveRestrictions = enforcementManager.hasActivePenaltiesOrInterventions()
                 try {
                     val rules = prefs.getRules().filter { it.isEnabled }
-                    val snapshot = usageRepository.getUsageSnapshot()
+                    val snapshot = usageRepository.getUsageSnapshot(forceRefresh = hasActiveRestrictions)
                     enforcementManager.evaluateRules(
                         usageMap = snapshot.usageMap,
                         rules = rules,
@@ -162,7 +165,13 @@ class UsageMonitoringService : Service() {
                     Log.e(TAG, "Error in usage monitoring loop", e)
                 }
 
-                val sleepTime = if (isScreenOn) SCREEN_ON_POLL_INTERVAL_MS else SCREEN_OFF_POLL_INTERVAL_MS
+                val sleepTime = if (!isScreenOn) {
+                    SCREEN_OFF_POLL_INTERVAL_MS
+                } else if (hasActiveRestrictions) {
+                    RESTRICTED_FAST_POLL_INTERVAL_MS
+                } else {
+                    SCREEN_ON_POLL_INTERVAL_MS
+                }
                 delay(sleepTime)
             }
         }

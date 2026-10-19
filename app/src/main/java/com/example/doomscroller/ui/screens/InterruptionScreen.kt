@@ -85,6 +85,23 @@ fun InterruptionScreen(
         }
     }
 
+    val restrictionDurationMinutes = remember { prefs.getRestrictionDurationMinutes() }
+    val pendingIntervention = prefs.getPendingIntervention(packageName)
+    val isPendingIntervention = pendingIntervention != null && !pendingIntervention.isAcknowledged && !pendingIntervention.isTimedOut
+    val ackRemainingMillis = if (isPendingIntervention) {
+        (pendingIntervention!!.deadlineMillis - currentTime).coerceAtLeast(0L)
+    } else {
+        0L
+    }
+    val ackRemainingSeconds = (ackRemainingMillis / 1000).toInt()
+
+    // Automatic transition to NO_ACK when 60s acknowledgment deadline expires
+    LaunchedEffect(isPendingIntervention, ackRemainingMillis) {
+        if (isPendingIntervention && ackRemainingMillis <= 0L) {
+            enforcementManager.triggerNoAckTimeout(packageName, pendingIntervention?.eventId)
+        }
+    }
+
     val activePenalty = enforcementManager.getActivePenalty(packageName) ?: enforcementManager.activePenalty.value
     val isPenaltyActive = activePenalty != null && !activePenalty.isExpired && (activePenalty.packageName == packageName || packageName.isEmpty() || packageName == "unknown")
     val remainingMillis = if (isPenaltyActive) {
@@ -173,7 +190,11 @@ fun InterruptionScreen(
                     Spacer(modifier = Modifier.height(16.dp))
 
                     Text(
-                        text = "Usage limit exceeded after sustained foreground activity without acknowledgement. 5-minute penalty cooldown activated.",
+                        text = if (isPendingIntervention) {
+                            "60-second acknowledgment window active. Acknowledge now or a $restrictionDurationMinutes-minute penalty restriction will activate automatically."
+                        } else {
+                            "Usage limit exceeded after sustained foreground activity without acknowledgement. $restrictionDurationMinutes-minute penalty cooldown activated."
+                        },
                         style = MaterialTheme.typography.bodyMedium,
                         textAlign = TextAlign.Center,
                         color = BauhausBlack
@@ -236,7 +257,35 @@ fun InterruptionScreen(
                         }
                     }
 
-                    if (isPenaltyActive) {
+                    if (isPendingIntervention) {
+                        Spacer(modifier = Modifier.height(16.dp))
+                        Box(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .background(BauhausMuted)
+                                .border(BorderStroke(2.dp, BauhausRed), RoundedCornerShape(0.dp))
+                                .padding(16.dp),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Text(
+                                    text = "AUTOMATIC RESTRICTION IN",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.Black,
+                                        color = BauhausRed
+                                    )
+                                )
+                                Spacer(modifier = Modifier.height(4.dp))
+                                Text(
+                                    text = "${ackRemainingSeconds}s",
+                                    style = MaterialTheme.typography.displayMedium.copy(
+                                        fontWeight = FontWeight.Black,
+                                        color = BauhausRed
+                                    )
+                                )
+                            }
+                        }
+                    } else if (isPenaltyActive) {
                         Spacer(modifier = Modifier.height(16.dp))
                         Box(
                             modifier = Modifier
@@ -293,7 +342,9 @@ fun InterruptionScreen(
 
         Button(
             onClick = {
-                if (isPenaltyActive) {
+                if (isPendingIntervention) {
+                    enforcementManager.acknowledgeIntervention(packageName, pendingIntervention?.eventId)
+                } else if (isPenaltyActive) {
                     enforcementManager.acknowledgePenalty(packageName)
                 }
                 onContinueClick()
@@ -307,7 +358,13 @@ fun InterruptionScreen(
             modifier = Modifier.fillMaxWidth()
         ) {
             Text(
-                text = if (isPenaltyActive) "ACKNOWLEDGE & GO TO DASHBOARD" else "RETURN TO DASHBOARD",
+                text = if (isPendingIntervention) {
+                    "ACKNOWLEDGE & CONTINUE"
+                } else if (isPenaltyActive) {
+                    "ACKNOWLEDGE & GO TO DASHBOARD"
+                } else {
+                    "RETURN TO DASHBOARD"
+                },
                 style = MaterialTheme.typography.labelMedium.copy(fontWeight = FontWeight.Bold),
                 modifier = Modifier.padding(vertical = 4.dp)
             )

@@ -23,10 +23,24 @@ data class PenaltyInfo(
     val remainingMillis: Long get() = remainingMillis(System.currentTimeMillis())
 }
 
+data class PendingIntervention(
+    val eventId: String,
+    val packageName: String,
+    val startTimeMillis: Long,
+    val deadlineMillis: Long,
+    val isAcknowledged: Boolean = false,
+    val isTimedOut: Boolean = false
+) {
+    fun isExpired(now: Long = System.currentTimeMillis()): Boolean = now >= deadlineMillis
+    fun remainingMillis(now: Long = System.currentTimeMillis()): Long = (deadlineMillis - now).coerceAtLeast(0L)
+}
+
 enum class EnforcementState {
     MONITORING,
     REMINDER_DUE,
     REMINDER_SENT,
+    INTERVENTION_ACTIVE,
+    NO_ACK,
     ESCALATION_DUE,
     ENFORCING,
     COOLDOWN,
@@ -119,6 +133,7 @@ class PreferencesManager(context: Context) : com.example.doomscroller.domain.Not
             .remove("active_penalty")
             .remove("warning_$packageName")
             .remove("session_$packageName")
+            .remove("pending_intervention_$packageName")
             .remove("history_$packageName")
             .remove("last_active_$packageName")
             .apply()
@@ -408,5 +423,58 @@ class PreferencesManager(context: Context) : com.example.doomscroller.domain.Not
 
     fun saveLastDisplayedQuoteId(quoteId: String) {
         prefs.edit().putString("pref_last_displayed_quote_id", quoteId).apply()
+    }
+
+    // --- Pending Intervention Persistence (60-second deadline) ---
+    fun getPendingIntervention(packageName: String): PendingIntervention? {
+        val str = prefs.getString("pending_intervention_$packageName", null) ?: return null
+        val parts = str.split(";")
+        if (parts.size >= 6) {
+            val eventId = parts[0]
+            val pkg = parts[1]
+            val start = parts[2].toLongOrNull() ?: return null
+            val deadline = parts[3].toLongOrNull() ?: return null
+            val ack = parts[4].toBooleanStrictOrNull() ?: false
+            val timedOut = parts[5].toBooleanStrictOrNull() ?: false
+            return PendingIntervention(eventId, pkg, start, deadline, ack, timedOut)
+        }
+        return null
+    }
+
+    fun savePendingIntervention(intervention: PendingIntervention) {
+        val serialized = "${intervention.eventId};${intervention.packageName};${intervention.startTimeMillis};" +
+                "${intervention.deadlineMillis};${intervention.isAcknowledged};${intervention.isTimedOut}"
+        prefs.edit().putString("pending_intervention_${intervention.packageName}", serialized).apply()
+    }
+
+    fun clearPendingIntervention(packageName: String) {
+        prefs.edit().remove("pending_intervention_$packageName").apply()
+    }
+
+    fun getAllPendingInterventions(): Map<String, PendingIntervention> {
+        val map = mutableMapOf<String, PendingIntervention>()
+        for ((key, value) in prefs.all) {
+            if (key.startsWith("pending_intervention_") && value is String) {
+                val pkg = key.removePrefix("pending_intervention_")
+                getPendingIntervention(pkg)?.let { map[pkg] = it }
+            }
+        }
+        return map
+    }
+
+    // --- Configurable Restriction (Cooldown) Duration Setting ---
+    companion object {
+        const val DEFAULT_RESTRICTION_DURATION_MINUTES = 5
+        val RESTRICTION_PRESETS = listOf(1, 5, 10, 15, 30, 60)
+    }
+
+    fun getRestrictionDurationMinutes(): Int {
+        val value = prefs.getInt("setting_restriction_duration_minutes", DEFAULT_RESTRICTION_DURATION_MINUTES)
+        return if (value in 1..1440) value else DEFAULT_RESTRICTION_DURATION_MINUTES
+    }
+
+    fun setRestrictionDurationMinutes(minutes: Int) {
+        val validated = if (minutes in 1..1440) minutes else DEFAULT_RESTRICTION_DURATION_MINUTES
+        prefs.edit().putInt("setting_restriction_duration_minutes", validated).apply()
     }
 }
