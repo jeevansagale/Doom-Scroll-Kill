@@ -25,4 +25,5 @@ sealed class Screen(val route: String) {
         }
     }
     object RecommendationGuidance : Screen("recommendation_guidance")
+    object Discovery : Screen("discovery")
 }

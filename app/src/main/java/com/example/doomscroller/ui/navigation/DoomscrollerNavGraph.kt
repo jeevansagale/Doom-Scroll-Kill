@@ -23,6 +23,7 @@ import com.example.doomscroller.ui.screens.LearningGateScreen
 import com.example.doomscroller.ui.screens.OnboardingScreen
 import com.example.doomscroller.ui.screens.PermissionSetupScreen
 import com.example.doomscroller.ui.screens.RecommendationGuidanceScreen
+import com.example.doomscroller.feature.discovery.ui.DiscoveryScreen
 
 @Composable
 fun DoomscrollerNavGraph(
@@ -95,6 +96,9 @@ fun DoomscrollerNavGraph(
                 },
                 onRecommendationGuidanceClick = {
                     navController.navigate(Screen.RecommendationGuidance.route)
+                },
+                onDiscoveryClick = {
+                    navController.navigate(Screen.Discovery.route)
                 }
             )
         }
@@ -168,6 +172,14 @@ fun DoomscrollerNavGraph(
 
         composable(route = Screen.RecommendationGuidance.route) {
             RecommendationGuidanceScreen(
+                onBackClick = {
+                    navController.popBackStack()
+                }
+            )
+        }
+
+        composable(route = Screen.Discovery.route) {
+            DiscoveryScreen(
                 onBackClick = {
                     navController.popBackStack()
                 }

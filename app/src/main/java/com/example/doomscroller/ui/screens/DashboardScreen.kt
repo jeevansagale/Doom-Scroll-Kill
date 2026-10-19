@@ -69,6 +69,7 @@ fun DashboardScreen(
     onAppClick: (String) -> Unit,
     onSettingsClick: () -> Unit,
     onRecommendationGuidanceClick: () -> Unit = {},
+    onDiscoveryClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val rules by viewModel.rules.collectAsState()
@@ -515,6 +516,67 @@ fun DashboardScreen(
                     modifier = Modifier
                         .fillMaxWidth()
                         .padding(top = 16.dp)
+                        .border(BorderStroke(2.dp, BauhausBlack), RoundedCornerShape(0.dp))
+                        .clickable { onDiscoveryClick() },
+                    colors = CardDefaults.cardColors(containerColor = BauhausCanvas),
+                    shape = RoundedCornerShape(0.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.padding(16.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        Column(modifier = Modifier.weight(1f)) {
+                            Row(verticalAlignment = Alignment.CenterVertically) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(10.dp)
+                                        .background(BauhausRed)
+                                )
+                                Spacer(modifier = Modifier.width(6.dp))
+                                Text(
+                                    text = "INTENTIONAL TOPIC DISCOVERY",
+                                    style = MaterialTheme.typography.labelSmall.copy(
+                                        fontWeight = FontWeight.Black,
+                                        color = BauhausRed,
+                                        letterSpacing = 1.sp
+                                    )
+                                )
+                            }
+                            Spacer(modifier = Modifier.height(4.dp))
+                            Text(
+                                text = "Discover educational YouTube videos & Instagram resources without entering addictive recommendation loops.",
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontWeight = FontWeight.Medium,
+                                    color = BauhausBlack
+                                )
+                            )
+                        }
+                        Spacer(modifier = Modifier.width(12.dp))
+                        Box(
+                            modifier = Modifier
+                                .size(36.dp)
+                                .background(BauhausBlack),
+                            contentAlignment = Alignment.Center
+                        ) {
+                            Text(
+                                text = "EXPLORE",
+                                style = MaterialTheme.typography.labelSmall.copy(
+                                    fontWeight = FontWeight.Black,
+                                    color = Color.White,
+                                    fontSize = 8.sp
+                                )
+                            )
+                        }
+                    }
+                }
+            }
+
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                Card(
+                    modifier = Modifier
+                        .fillMaxWidth()
+                        .padding(top = 12.dp)
                         .border(BorderStroke(2.dp, BauhausBlack), RoundedCornerShape(0.dp))
                         .clickable { onRecommendationGuidanceClick() },
                     colors = CardDefaults.cardColors(containerColor = BauhausMuted),
