@@ -135,3 +135,17 @@ The YouTube content-discovery feature can use a YouTube Data API key. Without a 
 ## License
 
 No license file is currently included. Unless a license is added, the repository should be treated as source available for viewing, not as granting general permission to reuse or redistribute the code.
+## Release Signing
+
+Release builds are not signed with the Android debug key.
+To produce a signed release APK, provide these environment variables to Gradle:
+
+```bash
+export ANDROID_KEYSTORE_PATH="/absolute/path/to/release-keystore.jks"
+export ANDROID_KEYSTORE_PASSWORD="<keystore-password>"
+export ANDROID_KEY_ALIAS="<key-alias>"
+export ANDROID_KEY_PASSWORD="<key-password>"
+./gradlew assembleRelease
+```
+
+If these variables are not all present, Gradle produces an unsigned release artifact. Keep the keystore and passwords outside the repository and store them in your CI secret manager when building releases.
