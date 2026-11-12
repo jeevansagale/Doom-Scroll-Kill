@@ -3,7 +3,28 @@ plugins {
     alias(libs.plugins.kotlin.compose)
 }
 
+val releaseKeystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+val releaseKeystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+val releaseKeyAlias = System.getenv("ANDROID_KEY_ALIAS")
+val releaseKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+val hasReleaseSigning = listOf(
+    releaseKeystorePath,
+    releaseKeystorePassword,
+    releaseKeyAlias,
+    releaseKeyPassword
+).all { !it.isNullOrBlank() }
+
 android {
+    signingConfigs {
+        if (hasReleaseSigning) {
+            create("release") {
+                storeFile = file(requireNotNull(releaseKeystorePath))
+                storePassword = requireNotNull(releaseKeystorePassword)
+                keyAlias = requireNotNull(releaseKeyAlias)
+                keyPassword = requireNotNull(releaseKeyPassword)
+            }
+        }
+    }
     namespace = "com.example.doomscroller"
     compileSdk = 37
 
@@ -22,7 +43,11 @@ android {
             optimization {
                 enable = false
             }
-            signingConfig = signingConfigs.getByName("debug")
+            // Never distribute a release signed with Android's public debug key.
+            // Without signing environment variables, the release build is unsigned.
+            if (hasReleaseSigning) {
+                signingConfig = signingConfigs.getByName("release")
+            }
         }
     }
     compileOptions {
